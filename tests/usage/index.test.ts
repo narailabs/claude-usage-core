@@ -1,0 +1,55 @@
+// tests/usage/index.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fetchUsage, transformUsageData } from '../../src/usage/index.js';
+
+describe('fetchUsage', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it('returns usage data on success', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        five_hour: { utilization: 0.45, resets_at: '2025-01-01T05:00:00Z' },
+        seven_day: { utilization: 0.30, resets_at: '2025-01-07T00:00:00Z' },
+        seven_day_opus: null,
+      }),
+    }));
+
+    const result = await fetchUsage('tok');
+    expect(result.five_hour.utilization).toBe(0.45);
+  });
+
+  it('throws AuthenticationError on 401', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, statusText: 'Unauthorized' }));
+    await expect(fetchUsage('tok')).rejects.toMatchObject({ name: 'AuthenticationError' });
+  });
+
+  it('throws generic error on other failures', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' }));
+    await expect(fetchUsage('tok')).rejects.toThrow('API error: 500');
+  });
+});
+
+describe('transformUsageData', () => {
+  it('transforms raw API response to DisplayData', () => {
+    const raw = {
+      five_hour: { utilization: 0.45, resets_at: '2025-01-01T05:00:00Z' },
+      seven_day: { utilization: 0.30, resets_at: null },
+      seven_day_opus: { utilization: 0.10, resets_at: '2025-01-07T00:00:00Z' },
+    };
+    const result = transformUsageData(raw);
+    expect(result.session.percent).toBe(0.45);
+    expect(result.session.resetsAt).toBeInstanceOf(Date);
+    expect(result.weekly.resetsAt).toBeNull();
+    expect(result.opus?.percent).toBe(0.10);
+  });
+
+  it('returns null for opus when not present', () => {
+    const raw = {
+      five_hour: { utilization: 0, resets_at: null },
+      seven_day: { utilization: 0, resets_at: null },
+    };
+    const result = transformUsageData(raw);
+    expect(result.opus).toBeNull();
+  });
+});
