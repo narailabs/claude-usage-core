@@ -34,10 +34,16 @@ export class AccountStore {
     }
   }
 
-  async saveAccount(name: string, credentials: string): Promise<void> {
+  async saveAccount(name: string, credentials: string, email?: string): Promise<void> {
     const data = await this.load();
     const existing = data.accounts.findIndex(a => a.name === name);
     const account: SavedAccount = { name, credentials, savedAt: new Date().toISOString() };
+    if (email) {
+      account.email = email;
+    } else if (existing >= 0 && data.accounts[existing].email) {
+      // Preserve existing email on credential-only updates (e.g. token refresh)
+      account.email = data.accounts[existing].email;
+    }
     if (existing >= 0) {
       data.accounts[existing] = account;
     } else {

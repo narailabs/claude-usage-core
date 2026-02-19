@@ -1,14 +1,34 @@
 // src/types.ts
+
+export interface UsageWindow {
+  percent: number;
+  resetsAt: Date | null;
+}
+
+export interface ExtraUsage {
+  isEnabled: boolean;
+  monthlyLimit: number | null;
+  usedCredits: number | null;
+  utilization: number | null;
+}
+
 export interface AccountUsage {
   accountName: string;
-  session: { percent: number; resetsAt: Date | null };
-  weekly: { percent: number; resetsAt: Date | null };
-  opus: { percent: number; resetsAt: Date | null } | null;
+  email?: string;
+  session: UsageWindow;
+  weekly: UsageWindow;
+  opus: UsageWindow | null;
+  sonnet: UsageWindow | null;
+  oauthApps: UsageWindow | null;
+  cowork: UsageWindow | null;
+  iguanaNecktie: UsageWindow | null;
+  extraUsage: ExtraUsage;
   error?: string;
 }
 
 export interface Account {
   name: string;
+  email?: string;
   isActive: boolean;
   savedAt: Date;
 }
@@ -30,6 +50,7 @@ export interface ClaudeCredentials {
 
 export interface SavedAccount {
   name: string;
+  email?: string;
   credentials: string; // JSON string of ClaudeCredentials
   savedAt: string;     // ISO timestamp
 }
