@@ -1,5 +1,6 @@
 // src/tokens/index.ts
 import type { ClaudeCredentials } from '../types.js';
+import { OAUTH_CLIENT_ID, OAUTH_TOKEN_URL } from '../auth/index.js';
 
 export interface TokenValidation {
   isValid: boolean;
@@ -13,8 +14,6 @@ export interface RefreshResult {
   newCredentials?: string;
   error?: string;
 }
-
-const TOKEN_URL = 'https://api.anthropic.com/oauth/token';
 
 export function validateToken(credentialsJson: string): TokenValidation {
   try {
@@ -37,10 +36,10 @@ export async function refreshToken(credentialsJson: string): Promise<RefreshResu
     const refreshTokenValue = creds.claudeAiOauth?.refreshToken;
     if (!refreshTokenValue) return { success: false, error: 'No refresh token' };
 
-    const response = await fetch(TOKEN_URL, {
+    const response = await fetch(OAUTH_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: refreshTokenValue }),
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: refreshTokenValue, client_id: OAUTH_CLIENT_ID }),
     });
 
     if (!response.ok) return { success: false, error: `HTTP ${response.status}` };

@@ -3,6 +3,7 @@
 //
 // Usage:
 //   npx tsx scripts/test-live.ts              # show usage for all saved accounts
+//   npx tsx scripts/test-live.ts auth <name>  # authenticate via browser and save as <name>
 //   npx tsx scripts/test-live.ts save <name>  # save current keychain credentials as <name>
 import { ClaudeUsageClient } from '../src/index.js';
 import type { AccountUsage, UsageWindow } from '../src/index.js';
@@ -63,6 +64,23 @@ function printUsageTable(usages: AccountUsage[]) {
 
 async function main() {
   const [command, ...args] = process.argv.slice(2);
+
+  // Auth subcommand: open browser, authenticate, and save account
+  if (command === 'auth') {
+    const name = args[0];
+    if (!name) {
+      console.error('Usage: test-live.ts auth <account-name>');
+      process.exit(1);
+    }
+    try {
+      await client.authenticate(name);
+      console.log(`Authenticated and saved account "${name}".`);
+    } catch (err) {
+      console.error(`Authentication failed for "${name}": ${(err as Error).message}`);
+      process.exit(1);
+    }
+    return;
+  }
 
   // Save subcommand: save current keychain creds under a name
   if (command === 'save') {
