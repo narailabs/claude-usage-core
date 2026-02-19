@@ -7,8 +7,8 @@ import type { ClaudeCredentials } from '../types.js';
 export const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 export const OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 
-const AUTHORIZE_URL = 'https://platform.claude.com/oauth/authorize';
-const SCOPES = 'user:profile user:inference';
+const AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
+const SCOPES = 'user:profile user:inference user:sessions:claude_code user:mcp_servers';
 const TIMEOUT_MS = 120_000;
 
 export interface AuthorizeOptions {
@@ -63,13 +63,14 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
   const state = base64url(randomBytes(32));
 
   return new Promise<string>((resolve, reject) => {
-    const server = createServer();
+    const server = createServer({ keepAliveTimeout: 1 });
     let settled = false;
 
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
         server.close();
+        server.closeAllConnections();
         reject(new Error('OAuth authorization timed out'));
       }
     }, timeoutMs);
@@ -92,6 +93,7 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
         clearTimeout(timer);
         res.writeHead(400, { 'Content-Type': 'text/html' }).end(`<h1>Error: ${error}</h1>`);
         server.close();
+        server.closeAllConnections();
         reject(new Error(`OAuth error: ${error}`));
         return;
       }
@@ -101,6 +103,7 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
         clearTimeout(timer);
         res.writeHead(400, { 'Content-Type': 'text/html' }).end('<h1>State mismatch</h1>');
         server.close();
+        server.closeAllConnections();
         reject(new Error('OAuth state mismatch'));
         return;
       }
@@ -110,6 +113,7 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
         clearTimeout(timer);
         res.writeHead(400, { 'Content-Type': 'text/html' }).end('<h1>Missing code</h1>');
         server.close();
+        server.closeAllConnections();
         reject(new Error('OAuth callback missing code'));
         return;
       }
@@ -153,11 +157,13 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
         settled = true;
         clearTimeout(timer);
         server.close();
+        server.closeAllConnections();
         resolve(JSON.stringify(credentials));
       } catch (err) {
         settled = true;
         clearTimeout(timer);
         server.close();
+        server.closeAllConnections();
         reject(err);
       }
     });
