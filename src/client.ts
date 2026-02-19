@@ -5,6 +5,7 @@ import { AccountStore } from './storage/index.js';
 import { createCredentialReader, type Platform } from './credentials/index.js';
 import { validateToken, refreshToken } from './tokens/index.js';
 import { fetchProfile, fetchUsage, transformUsageData, AuthenticationError } from './usage/index.js';
+import { authorize, type AuthorizeOptions } from './auth/index.js';
 import { AccountNotFoundError } from './errors.js';
 import type { Account, AccountUsage, ClaudeUsageClientOptions, ClaudeCredentials } from './types.js';
 
@@ -52,6 +53,11 @@ export class ClaudeUsageClient {
       isActive: a.name === data.activeAccountName,
       savedAt: new Date(a.savedAt),
     }));
+  }
+
+  async authenticate(name: string, options?: AuthorizeOptions): Promise<void> {
+    const credentials = await authorize(options);
+    await this.saveAccount(name, credentials);
   }
 
   async saveAccount(name: string, credentials?: string): Promise<void> {
