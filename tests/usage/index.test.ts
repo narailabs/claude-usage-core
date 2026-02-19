@@ -31,17 +31,30 @@ describe('fetchUsage', () => {
 });
 
 describe('transformUsageData', () => {
-  it('transforms raw API response to DisplayData', () => {
+  it('transforms raw API response with all windows', () => {
     const raw = {
       five_hour: { utilization: 0.45, resets_at: '2025-01-01T05:00:00Z' },
       seven_day: { utilization: 0.30, resets_at: null },
       seven_day_opus: { utilization: 0.10, resets_at: '2025-01-07T00:00:00Z' },
+      seven_day_sonnet: { utilization: 0.12, resets_at: '2025-01-07T00:00:00Z' },
+      seven_day_oauth_apps: null,
+      seven_day_cowork: null,
+      iguana_necktie: null,
+      extra_usage: { is_enabled: true, monthly_limit: 100, used_credits: 25, utilization: 0.25 },
     };
     const result = transformUsageData(raw);
     expect(result.session.percent).toBe(0.45);
     expect(result.session.resetsAt).toBeInstanceOf(Date);
     expect(result.weekly.resetsAt).toBeNull();
     expect(result.opus?.percent).toBe(0.10);
+    expect(result.sonnet?.percent).toBe(0.12);
+    expect(result.oauthApps).toBeNull();
+    expect(result.cowork).toBeNull();
+    expect(result.iguanaNecktie).toBeNull();
+    expect(result.extraUsage.isEnabled).toBe(true);
+    expect(result.extraUsage.monthlyLimit).toBe(100);
+    expect(result.extraUsage.usedCredits).toBe(25);
+    expect(result.extraUsage.utilization).toBe(0.25);
   });
 
   it('returns null for opus when not present', () => {
@@ -51,5 +64,7 @@ describe('transformUsageData', () => {
     };
     const result = transformUsageData(raw);
     expect(result.opus).toBeNull();
+    expect(result.sonnet).toBeNull();
+    expect(result.extraUsage.isEnabled).toBe(false);
   });
 });
