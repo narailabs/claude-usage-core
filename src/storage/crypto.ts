@@ -1,7 +1,8 @@
 // src/storage/crypto.ts
 import { createCipheriv, createDecipheriv, pbkdf2, randomBytes, createHash } from 'node:crypto';
 import { promisify } from 'node:util';
-import { machineIdSync } from 'node-machine-id';
+import machineId from 'node-machine-id';
+const { machineIdSync } = machineId;
 
 const pbkdf2Async = promisify(pbkdf2);
 
