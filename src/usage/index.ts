@@ -61,7 +61,6 @@ function makeHeaders(token: string, betaVersion: string) {
     Authorization: `Bearer ${token}`,
     Accept: 'application/json',
     'anthropic-beta': betaVersion,
-    'User-Agent': 'claude-usage-core/0.1.0',
   };
 }
 
