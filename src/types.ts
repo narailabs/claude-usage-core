@@ -80,6 +80,11 @@ export interface ClaudeUsageClientOptions {
   platform?: 'auto' | 'macos' | 'linux' | 'windows';
 }
 
+export interface UsageOptions {
+  /** YYYY-MM-DD date string for admin API lookback start (default: 1st of current month) */
+  startingAt?: string;
+}
+
 // Internal — not exported from index.ts
 export interface ClaudeCredentials {
   claudeAiOauth?: {

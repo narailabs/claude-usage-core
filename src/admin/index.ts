@@ -5,55 +5,66 @@ import type { AdminAccountUsage, ActorUsage, ModelUsageBreakdown } from '../type
 const API_BASE = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
 
-// Raw API response types
-interface RawModelBreakdown {
-  model: string;
-  tokens: {
-    input: number;
-    output: number;
-    cache_creation: number;
-    cache_read: number;
-  };
-  estimated_cost: {
-    amount: number;
-    currency: string;
-  };
+// Raw API response types for /usage_report/messages
+interface RawCacheCreation {
+  ephemeral_5m_input_tokens: number;
+  ephemeral_1h_input_tokens: number;
 }
 
-export interface RawClaudeCodeEntry {
-  date: string;
-  actor: {
-    user_actor?: { email: string };
-    api_actor?: { api_key_name: string };
-  };
-  customer_type: string;
-  model_breakdown: RawModelBreakdown[];
+interface RawBucketResult {
+  api_key_id: string | null;
+  model: string | null;
+  workspace_id: string | null;
+  uncached_input_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation: RawCacheCreation;
+  output_tokens: number;
+  server_tool_use: { web_search_requests: number };
 }
 
-interface RawClaudeCodeResponse {
-  data: RawClaudeCodeEntry[];
+interface RawBucket {
+  starting_at: string;
+  ending_at: string;
+  results: RawBucketResult[];
+}
+
+interface RawMessagesUsageReport {
+  data: RawBucket[];
   has_more: boolean;
   next_page: string | null;
 }
 
 /**
- * Fetches the Claude Code usage report from the Admin API.
- * Handles pagination to return all entries.
- * Defaults to usage from the start of the current month.
+ * Fetches the messages usage report from the Admin API.
+ * Uses /v1/organizations/usage_report/messages with daily buckets grouped by API key and model.
+ * @param startingAt YYYY-MM-DD date string (converted to RFC 3339 internally)
  */
-export async function fetchClaudeCodeUsage(
+export async function fetchMessagesUsage(
   adminApiKey: string,
   startingAt?: string,
-): Promise<RawClaudeCodeEntry[]> {
-  const start = startingAt ?? `${new Date().toISOString().slice(0, 8)}01`;
-  const entries: RawClaudeCodeEntry[] = [];
+): Promise<RawBucket[]> {
+  const startDate = startingAt ?? `${new Date().toISOString().slice(0, 8)}01`;
+  const start = `${startDate}T00:00:00Z`;
+
+  // End at tomorrow to include all of today's data
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const end = `${tomorrow.toISOString().slice(0, 10)}T00:00:00Z`;
+
+  const buckets: RawBucket[] = [];
   let page: string | null = null;
 
   do {
-    const params = new URLSearchParams({ starting_at: start, limit: '1000' });
+    const params = new URLSearchParams({
+      starting_at: start,
+      ending_at: end,
+      bucket_width: '1d',
+      limit: '31',
+    });
     if (page) params.set('page', page);
 
-    const url = `${API_BASE}/organizations/usage_report/claude_code?${params}`;
+    // Append group_by[] manually — URLSearchParams encodes [] to %5B%5D which the API may reject
+    const url = `${API_BASE}/organizations/usage_report/messages?${params}&group_by[]=api_key_id&group_by[]=model`;
     const response = await fetch(url, {
       headers: {
         'x-api-key': adminApiKey,
@@ -71,46 +82,39 @@ export async function fetchClaudeCodeUsage(
       throw new Error(errorMessage || `Admin API error: ${response.status} ${response.statusText}`);
     }
 
-    const body = await response.json() as RawClaudeCodeResponse;
-    entries.push(...body.data);
+    const body = await response.json() as RawMessagesUsageReport;
+    buckets.push(...body.data);
     page = body.has_more ? body.next_page : null;
   } while (page);
 
-  return entries;
+  return buckets;
 }
 
-function getActorKey(entry: RawClaudeCodeEntry): string {
-  if (entry.actor.api_actor) return `api:${entry.actor.api_actor.api_key_name}`;
-  if (entry.actor.user_actor) return `user:${entry.actor.user_actor.email}`;
-  return 'unknown:unknown';
-}
-
-function addToModelMap(map: Map<string, ModelUsageBreakdown>, mb: RawModelBreakdown): void {
-  const existing = map.get(mb.model);
+function addToModelMap(map: Map<string, ModelUsageBreakdown>, model: string, input: number, output: number, cacheCreation: number, cacheRead: number): void {
+  const existing = map.get(model);
   if (existing) {
-    existing.inputTokens += mb.tokens.input;
-    existing.outputTokens += mb.tokens.output;
-    existing.cacheCreationTokens += mb.tokens.cache_creation;
-    existing.cacheReadTokens += mb.tokens.cache_read;
-    existing.estimatedCostCents += mb.estimated_cost.amount;
+    existing.inputTokens += input;
+    existing.outputTokens += output;
+    existing.cacheCreationTokens += cacheCreation;
+    existing.cacheReadTokens += cacheRead;
   } else {
-    map.set(mb.model, {
-      model: mb.model,
-      inputTokens: mb.tokens.input,
-      outputTokens: mb.tokens.output,
-      cacheCreationTokens: mb.tokens.cache_creation,
-      cacheReadTokens: mb.tokens.cache_read,
-      estimatedCostCents: mb.estimated_cost.amount,
+    map.set(model, {
+      model,
+      inputTokens: input,
+      outputTokens: output,
+      cacheCreationTokens: cacheCreation,
+      cacheReadTokens: cacheRead,
+      estimatedCostCents: 0,
     });
   }
 }
 
 /**
- * Aggregates raw Claude Code usage entries into an AdminAccountUsage object.
- * Groups by actor (API key or user), with per-model breakdown for each.
+ * Aggregates raw messages usage buckets into an AdminAccountUsage object.
+ * Groups by API key (actor), with per-model breakdown for each.
  */
-export function transformClaudeCodeUsage(
-  entries: RawClaudeCodeEntry[],
+export function transformMessagesUsage(
+  buckets: RawBucket[],
   accountName: string,
 ): Omit<AdminAccountUsage, 'accountType' | 'error'> {
   const globalModelMap = new Map<string, ModelUsageBreakdown>();
@@ -129,52 +133,50 @@ export function transformClaudeCodeUsage(
   let totalOutput = 0;
   let totalCacheCreation = 0;
   let totalCacheRead = 0;
-  let totalCost = 0;
   let minDate: string | null = null;
   let maxDate: string | null = null;
 
-  for (const entry of entries) {
-    if (!minDate || entry.date < minDate) minDate = entry.date;
-    if (!maxDate || entry.date > maxDate) maxDate = entry.date;
+  for (const bucket of buckets) {
+    const bucketDate = bucket.starting_at;
+    if (!minDate || bucketDate < minDate) minDate = bucketDate;
+    if (!maxDate || bucketDate > maxDate) maxDate = bucketDate;
 
-    const actorKey = getActorKey(entry);
-    let actor = actorMap.get(actorKey);
-    if (!actor) {
-      const isApi = !!entry.actor.api_actor;
-      actor = {
-        actorType: isApi ? 'api_key' : 'user',
-        actorName: isApi ? entry.actor.api_actor!.api_key_name : entry.actor.user_actor!.email,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheCreationTokens: 0,
-        cacheReadTokens: 0,
-        estimatedCostCents: 0,
-        modelMap: new Map(),
-      };
-      actorMap.set(actorKey, actor);
-    }
-
-    for (const mb of entry.model_breakdown) {
-      const input = mb.tokens.input;
-      const output = mb.tokens.output;
-      const cacheCreation = mb.tokens.cache_creation;
-      const cacheRead = mb.tokens.cache_read;
-      const cost = mb.estimated_cost.amount;
+    for (const result of bucket.results) {
+      const input = result.uncached_input_tokens + result.cache_read_input_tokens
+        + result.cache_creation.ephemeral_5m_input_tokens + result.cache_creation.ephemeral_1h_input_tokens;
+      const output = result.output_tokens;
+      const cacheCreation = result.cache_creation.ephemeral_5m_input_tokens + result.cache_creation.ephemeral_1h_input_tokens;
+      const cacheRead = result.cache_read_input_tokens;
 
       totalInput += input;
       totalOutput += output;
       totalCacheCreation += cacheCreation;
       totalCacheRead += cacheRead;
-      totalCost += cost;
 
+      // Actor aggregation (by API key ID)
+      const actorKey = result.api_key_id ?? 'console';
+      let actor = actorMap.get(actorKey);
+      if (!actor) {
+        actor = {
+          actorType: 'api_key',
+          actorName: actorKey,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          estimatedCostCents: 0,
+          modelMap: new Map(),
+        };
+        actorMap.set(actorKey, actor);
+      }
       actor.inputTokens += input;
       actor.outputTokens += output;
       actor.cacheCreationTokens += cacheCreation;
       actor.cacheReadTokens += cacheRead;
-      actor.estimatedCostCents += cost;
 
-      addToModelMap(globalModelMap, mb);
-      addToModelMap(actor.modelMap, mb);
+      const model = result.model ?? 'unknown';
+      addToModelMap(globalModelMap, model, input, output, cacheCreation, cacheRead);
+      addToModelMap(actor.modelMap, model, input, output, cacheCreation, cacheRead);
     }
   }
 
@@ -197,7 +199,7 @@ export function transformClaudeCodeUsage(
     outputTokens: totalOutput,
     cacheCreationTokens: totalCacheCreation,
     cacheReadTokens: totalCacheRead,
-    estimatedCostCents: totalCost,
+    estimatedCostCents: 0,
     modelBreakdown: Array.from(globalModelMap.values()),
     actors,
   };

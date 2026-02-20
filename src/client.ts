@@ -5,10 +5,10 @@ import { AccountStore } from './storage/index.js';
 import { createCredentialReader, type Platform } from './credentials/index.js';
 import { validateToken, refreshToken } from './tokens/index.js';
 import { fetchProfile, fetchUsage, transformUsageData } from './usage/index.js';
-import { fetchClaudeCodeUsage, transformClaudeCodeUsage } from './admin/index.js';
+import { fetchMessagesUsage, transformMessagesUsage } from './admin/index.js';
 import { authorize, type AuthorizeOptions } from './auth/index.js';
 import { AccountNotFoundError, AuthenticationError } from './errors.js';
-import type { Account, AccountUsage, OAuthAccountUsage, AdminAccountUsage, ClaudeUsageClientOptions, ClaudeCredentials, AdminCredentials } from './types.js';
+import type { Account, AccountUsage, OAuthAccountUsage, AdminAccountUsage, ClaudeUsageClientOptions, UsageOptions, ClaudeCredentials, AdminCredentials } from './types.js';
 
 const DEFAULT_STORAGE = join(homedir(), '.claude-usage', 'accounts.enc');
 
@@ -88,7 +88,7 @@ export class ClaudeUsageClient {
       throw new Error('Invalid admin API key format — must start with "sk-ant-admin"');
     }
     // Validate the key works by fetching usage (will throw on 401)
-    await fetchClaudeCodeUsage(adminApiKey);
+    await fetchMessagesUsage(adminApiKey);
     const creds: AdminCredentials = { adminApiKey };
     await this.store.saveAccount(name, JSON.stringify(creds), undefined, 'admin');
   }
@@ -105,34 +105,39 @@ export class ClaudeUsageClient {
     if (!deleted) throw new AccountNotFoundError(name);
   }
 
-  async getAllAccountsUsage(): Promise<AccountUsage[]> {
+  async getAllAccountsUsage(options?: UsageOptions): Promise<AccountUsage[]> {
     const data = await this.store.load();
     return Promise.all(
-      data.accounts.map(a => this._fetchAccountUsage(a))
+      data.accounts.map(a => this._fetchAccountUsage(a, options))
     );
   }
 
-  async getAccountUsage(name: string): Promise<AccountUsage> {
+  async getAccountUsage(name: string, options?: UsageOptions): Promise<AccountUsage> {
     const data = await this.store.load();
     const account = data.accounts.find(a => a.name === name);
     if (!account) throw new AccountNotFoundError(name);
-    return this._fetchAccountUsage(account);
+    return this._fetchAccountUsage(account, options);
   }
 
-  private async _fetchAccountUsage(account: { name: string; email?: string; credentials: string; accountType?: string }): Promise<AccountUsage> {
+  private async _fetchAccountUsage(account: { name: string; email?: string; credentials: string; accountType?: string }, options?: UsageOptions): Promise<AccountUsage> {
     const accountType = account.accountType ?? 'oauth';
 
     if (accountType === 'admin') {
-      return this._fetchAdminAccountUsage(account.name, account.credentials);
+      return this._fetchAdminAccountUsage(account.name, account.credentials, options?.startingAt);
     }
     return this._fetchOAuthAccountUsage(account.name, account.email, account.credentials);
   }
 
-  private async _fetchAdminAccountUsage(name: string, credentialsJson: string): Promise<AdminAccountUsage> {
+  private async _fetchAdminAccountUsage(name: string, credentialsJson: string, startingAt?: string): Promise<AdminAccountUsage> {
     try {
       const creds: AdminCredentials = JSON.parse(credentialsJson);
-      const entries = await fetchClaudeCodeUsage(creds.adminApiKey);
-      return { accountType: 'admin', ...transformClaudeCodeUsage(entries, name) };
+      const buckets = await fetchMessagesUsage(creds.adminApiKey, startingAt);
+      const usage = transformMessagesUsage(buckets, name);
+      // Use requested date range for period display instead of data-derived dates
+      const requestedStart = startingAt ?? `${new Date().toISOString().slice(0, 8)}01`;
+      usage.periodStart = new Date(`${requestedStart}T00:00:00Z`);
+      usage.periodEnd = new Date();
+      return { accountType: 'admin', ...usage };
     } catch (err) {
       return {
         accountType: 'admin',
