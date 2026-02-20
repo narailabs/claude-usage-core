@@ -26,6 +26,14 @@ describe('validateToken', () => {
     expect(result.isValid).toBe(false);
     expect(result.expiresAt).toBeNull();
   });
+
+  it('returns invalid for malformed JSON', () => {
+    const result = validateToken('not-valid-json');
+    expect(result.isValid).toBe(false);
+    expect(result.isExpired).toBe(false);
+    expect(result.expiresAt).toBeNull();
+    expect(result.minutesUntilExpiry).toBeNull();
+  });
 });
 
 describe('refreshToken', () => {
@@ -65,5 +73,20 @@ describe('refreshToken', () => {
     const creds = JSON.stringify({ claudeAiOauth: { accessToken: 'old', refreshToken: 'rt', expiresAt: '' } });
     const result = await refreshToken(creds);
     expect(result.success).toBe(false);
+  });
+
+  it('returns failure when no refresh token in creds', async () => {
+    const creds = JSON.stringify({ claudeAiOauth: { accessToken: 'tok' } });
+    const result = await refreshToken(creds);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('No refresh token');
+  });
+
+  it('returns failure on network error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
+    const creds = JSON.stringify({ claudeAiOauth: { accessToken: 'tok', refreshToken: 'rt', expiresAt: '' } });
+    const result = await refreshToken(creds);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Network error');
   });
 });

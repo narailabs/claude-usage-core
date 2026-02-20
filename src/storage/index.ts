@@ -3,7 +3,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { encrypt, decrypt } from './crypto.js';
 import { StorageError } from '../errors.js';
-import type { AccountsData, SavedAccount } from '../types.js';
+import type { AccountsData, AccountType, SavedAccount } from '../types.js';
 
 const EMPTY: AccountsData = { accounts: [], activeAccountName: null };
 
@@ -34,10 +34,15 @@ export class AccountStore {
     }
   }
 
-  async saveAccount(name: string, credentials: string, email?: string): Promise<void> {
+  async saveAccount(
+    name: string,
+    credentials: string,
+    email?: string,
+    accountType: AccountType = 'oauth',
+  ): Promise<void> {
     const data = await this.load();
     const existing = data.accounts.findIndex(a => a.name === name);
-    const account: SavedAccount = { name, credentials, savedAt: new Date().toISOString() };
+    const account: SavedAccount = { name, accountType, credentials, savedAt: new Date().toISOString() };
     if (email) {
       account.email = email;
     } else if (existing >= 0 && data.accounts[existing].email) {

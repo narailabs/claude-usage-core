@@ -1,15 +1,12 @@
 // src/usage/index.ts
-import type { AccountUsage } from '../types.js';
+import type { OAuthAccountUsage } from '../types.js';
+import { AuthenticationError } from '../errors.js';
+
+// Re-export for backward compatibility
+export { AuthenticationError } from '../errors.js';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile';
-
-export class AuthenticationError extends Error {
-  constructor(public readonly statusCode: number) {
-    super(`Authentication failed (HTTP ${statusCode})`);
-    this.name = 'AuthenticationError';
-  }
-}
 
 export interface RawUsageWindow {
   utilization: number;
@@ -97,7 +94,7 @@ function transformWindow(w: RawUsageWindow | null | undefined) {
   return { percent: w.utilization, resetsAt: w.resets_at ? new Date(w.resets_at) : null };
 }
 
-export function transformUsageData(data: UsageResponse): Omit<AccountUsage, 'accountName' | 'email' | 'error'> {
+export function transformUsageData(data: UsageResponse): Omit<OAuthAccountUsage, 'accountType' | 'accountName' | 'email' | 'error'> {
   return {
     session: { percent: data.five_hour.utilization, resetsAt: data.five_hour.resets_at ? new Date(data.five_hour.resets_at) : null },
     weekly: { percent: data.seven_day.utilization, resetsAt: data.seven_day.resets_at ? new Date(data.seven_day.resets_at) : null },

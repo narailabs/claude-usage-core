@@ -15,4 +15,14 @@ describe('createCredentialReader', () => {
   it('returns Windows reader for windows platform', () => {
     expect(createCredentialReader('windows')).toBeInstanceOf(WindowsCredentialReader);
   });
+  it('returns a reader for auto platform (detects current OS)', () => {
+    const reader = createCredentialReader('auto');
+    expect(reader).toBeDefined();
+    expect(typeof reader.read).toBe('function');
+  });
+  it('returns a reader when called with no arguments', () => {
+    const reader = createCredentialReader();
+    expect(reader).toBeDefined();
+    expect(typeof reader.read).toBe('function');
+  });
 });
