@@ -1,76 +1,71 @@
 // tests/admin/index.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fetchClaudeCodeUsage, transformClaudeCodeUsage } from '../../src/admin/index.js';
+import { fetchMessagesUsage, transformMessagesUsage } from '../../src/admin/index.js';
 import { AuthenticationError } from '../../src/errors.js';
-import type { RawClaudeCodeEntry } from '../../src/admin/index.js';
 
-const MOCK_ENTRIES: RawClaudeCodeEntry[] = [
-  {
-    date: '2026-02-15',
-    actor: { api_actor: { api_key_name: 'my-key' } },
-    customer_type: 'api',
-    model_breakdown: [
-      {
-        model: 'claude-sonnet-4-20250514',
-        tokens: { input: 5000, output: 1000, cache_creation: 200, cache_read: 300 },
-        estimated_cost: { amount: 150, currency: 'cents' },
-      },
-      {
-        model: 'claude-haiku-4-5-20251001',
-        tokens: { input: 2000, output: 500, cache_creation: 0, cache_read: 0 },
-        estimated_cost: { amount: 25, currency: 'cents' },
-      },
-    ],
-  },
-  {
-    date: '2026-02-16',
-    actor: { user_actor: { email: 'user@example.com' } },
-    customer_type: 'subscription',
-    model_breakdown: [
-      {
-        model: 'claude-sonnet-4-20250514',
-        tokens: { input: 3000, output: 800, cache_creation: 100, cache_read: 50 },
-        estimated_cost: { amount: 95, currency: 'cents' },
-      },
-    ],
-  },
-  {
-    date: '2026-02-16',
-    actor: { api_actor: { api_key_name: 'my-key' } },
-    customer_type: 'api',
-    model_breakdown: [
-      {
-        model: 'claude-sonnet-4-20250514',
-        tokens: { input: 1000, output: 200, cache_creation: 50, cache_read: 10 },
-        estimated_cost: { amount: 30, currency: 'cents' },
-      },
-    ],
-  },
+// Helper to build a raw bucket result matching the messages API shape
+function makeResult(overrides: Partial<{
+  api_key_id: string | null;
+  model: string | null;
+  uncached_input_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation: { ephemeral_5m_input_tokens: number; ephemeral_1h_input_tokens: number };
+  output_tokens: number;
+}> = {}) {
+  return {
+    api_key_id: 'api_key_id' in overrides ? overrides.api_key_id : 'key-1',
+    model: 'model' in overrides ? overrides.model : 'claude-sonnet-4-20250514',
+    workspace_id: null,
+    uncached_input_tokens: overrides.uncached_input_tokens ?? 5000,
+    cache_read_input_tokens: overrides.cache_read_input_tokens ?? 300,
+    cache_creation: overrides.cache_creation ?? { ephemeral_5m_input_tokens: 200, ephemeral_1h_input_tokens: 0 },
+    output_tokens: overrides.output_tokens ?? 1000,
+    server_tool_use: { web_search_requests: 0 },
+  };
+}
+
+function makeBucket(date: string, results: ReturnType<typeof makeResult>[]) {
+  return { starting_at: date, ending_at: date, results };
+}
+
+const MOCK_BUCKETS = [
+  makeBucket('2026-02-15', [
+    makeResult({ api_key_id: 'key-1', model: 'claude-sonnet-4-20250514', uncached_input_tokens: 5000, cache_read_input_tokens: 300, cache_creation: { ephemeral_5m_input_tokens: 200, ephemeral_1h_input_tokens: 0 }, output_tokens: 1000 }),
+    makeResult({ api_key_id: 'key-1', model: 'claude-haiku-4-5-20251001', uncached_input_tokens: 2000, cache_read_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 }, output_tokens: 500 }),
+  ]),
+  makeBucket('2026-02-16', [
+    makeResult({ api_key_id: 'key-2', model: 'claude-sonnet-4-20250514', uncached_input_tokens: 3000, cache_read_input_tokens: 50, cache_creation: { ephemeral_5m_input_tokens: 100, ephemeral_1h_input_tokens: 0 }, output_tokens: 800 }),
+  ]),
+  makeBucket('2026-02-16', [
+    makeResult({ api_key_id: 'key-1', model: 'claude-sonnet-4-20250514', uncached_input_tokens: 1000, cache_read_input_tokens: 10, cache_creation: { ephemeral_5m_input_tokens: 50, ephemeral_1h_input_tokens: 0 }, output_tokens: 200 }),
+  ]),
 ];
 
-describe('fetchClaudeCodeUsage', () => {
+describe('fetchMessagesUsage', () => {
   beforeEach(() => vi.restoreAllMocks());
 
   it('fetches usage data successfully', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ data: MOCK_ENTRIES, has_more: false, next_page: null }),
+      json: async () => ({ data: MOCK_BUCKETS, has_more: false, next_page: null }),
     }));
-    const entries = await fetchClaudeCodeUsage('sk-ant-admin-test');
-    expect(entries).toHaveLength(3);
-    expect(entries[0].date).toBe('2026-02-15');
+    const buckets = await fetchMessagesUsage('sk-ant-admin-test');
+    expect(buckets).toHaveLength(3);
+    expect(buckets[0].starting_at).toBe('2026-02-15');
   });
 
-  it('sends correct headers', async () => {
+  it('sends correct headers and URL', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ data: [], has_more: false, next_page: null }),
     });
     vi.stubGlobal('fetch', mockFetch);
-    await fetchClaudeCodeUsage('sk-ant-admin-test');
+    await fetchMessagesUsage('sk-ant-admin-test');
 
     const [url, init] = mockFetch.mock.calls[0];
-    expect(url).toContain('/v1/organizations/usage_report/claude_code');
+    expect(url).toContain('/v1/organizations/usage_report/messages');
+    expect(url).toContain('group_by[]=api_key_id');
+    expect(url).toContain('group_by[]=model');
     expect(init.headers['x-api-key']).toBe('sk-ant-admin-test');
     expect(init.headers['anthropic-version']).toBe('2023-06-01');
   });
@@ -81,10 +76,10 @@ describe('fetchClaudeCodeUsage', () => {
       json: async () => ({ data: [], has_more: false, next_page: null }),
     });
     vi.stubGlobal('fetch', mockFetch);
-    await fetchClaudeCodeUsage('sk-ant-admin-test', '2026-01-01');
+    await fetchMessagesUsage('sk-ant-admin-test', '2026-01-01');
 
     const [url] = mockFetch.mock.calls[0];
-    expect(url).toContain('starting_at=2026-01-01');
+    expect(url).toContain('starting_at=2026-01-01T00%3A00%3A00Z');
   });
 
   it('defaults starting_at to first of current month', async () => {
@@ -93,30 +88,27 @@ describe('fetchClaudeCodeUsage', () => {
       json: async () => ({ data: [], has_more: false, next_page: null }),
     });
     vi.stubGlobal('fetch', mockFetch);
-    await fetchClaudeCodeUsage('sk-ant-admin-test');
+    await fetchMessagesUsage('sk-ant-admin-test');
 
     const [url] = mockFetch.mock.calls[0];
-    const now = new Date();
-    const expectedStart = `${now.toISOString().slice(0, 8)}01`;
+    const expectedStart = `${new Date().toISOString().slice(0, 8)}01`;
     expect(url).toContain(`starting_at=${expectedStart}`);
   });
 
   it('handles pagination', async () => {
-    const page1 = [MOCK_ENTRIES[0]];
-    const page2 = [MOCK_ENTRIES[1]];
     const mockFetch = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ data: page1, has_more: true, next_page: 'page2token' }),
+        json: async () => ({ data: [MOCK_BUCKETS[0]], has_more: true, next_page: 'page2token' }),
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ data: page2, has_more: false, next_page: null }),
+        json: async () => ({ data: [MOCK_BUCKETS[1]], has_more: false, next_page: null }),
       });
     vi.stubGlobal('fetch', mockFetch);
-    const entries = await fetchClaudeCodeUsage('sk-ant-admin-test');
+    const buckets = await fetchMessagesUsage('sk-ant-admin-test');
 
-    expect(entries).toHaveLength(2);
+    expect(buckets).toHaveLength(2);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     const [secondUrl] = mockFetch.mock.calls[1];
     expect(secondUrl).toContain('page=page2token');
@@ -124,7 +116,7 @@ describe('fetchClaudeCodeUsage', () => {
 
   it('throws AuthenticationError on 401', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, statusText: 'Unauthorized' }));
-    await expect(fetchClaudeCodeUsage('bad-key')).rejects.toBeInstanceOf(AuthenticationError);
+    await expect(fetchMessagesUsage('bad-key')).rejects.toBeInstanceOf(AuthenticationError);
   });
 
   it('throws error with API message on failure', async () => {
@@ -134,7 +126,7 @@ describe('fetchClaudeCodeUsage', () => {
       statusText: 'Forbidden',
       json: async () => ({ error: { message: 'Insufficient permissions' } }),
     }));
-    await expect(fetchClaudeCodeUsage('sk-ant-admin-test')).rejects.toThrow('Insufficient permissions');
+    await expect(fetchMessagesUsage('sk-ant-admin-test')).rejects.toThrow('Insufficient permissions');
   });
 
   it('throws generic error when no API message', async () => {
@@ -144,28 +136,57 @@ describe('fetchClaudeCodeUsage', () => {
       statusText: 'Server Error',
       json: async () => ({}),
     }));
-    await expect(fetchClaudeCodeUsage('sk-ant-admin-test')).rejects.toThrow('Admin API error: 500 Server Error');
+    await expect(fetchMessagesUsage('sk-ant-admin-test')).rejects.toThrow('Admin API error: 500 Server Error');
   });
 });
 
-describe('transformClaudeCodeUsage', () => {
-  it('aggregates tokens across all entries', () => {
-    const result = transformClaudeCodeUsage(MOCK_ENTRIES, 'Org');
+describe('transformMessagesUsage', () => {
+  it('aggregates tokens across all buckets', () => {
+    const result = transformMessagesUsage(MOCK_BUCKETS, 'Org');
     expect(result.accountName).toBe('Org');
-    expect(result.inputTokens).toBe(5000 + 2000 + 3000 + 1000);
+    // input = uncached + cache_read + cache_creation for each result
+    expect(result.inputTokens).toBe(
+      (5000 + 300 + 200) + (2000 + 0 + 0) + (3000 + 50 + 100) + (1000 + 10 + 50)
+    );
     expect(result.outputTokens).toBe(1000 + 500 + 800 + 200);
     expect(result.cacheCreationTokens).toBe(200 + 0 + 100 + 50);
     expect(result.cacheReadTokens).toBe(300 + 0 + 50 + 10);
-    expect(result.estimatedCostCents).toBe(150 + 25 + 95 + 30);
   });
 
-  it('aggregates global model breakdown across all entries', () => {
-    const result = transformClaudeCodeUsage(MOCK_ENTRIES, 'Org');
+  it('computes estimated cost from token counts', () => {
+    const result = transformMessagesUsage(MOCK_BUCKETS, 'Org');
+    expect(result.estimatedCostCents).toBeGreaterThan(0);
+  });
+
+  it('computes per-model cost', () => {
+    const result = transformMessagesUsage(MOCK_BUCKETS, 'Org');
+    const sonnet = result.modelBreakdown.find(m => m.model === 'claude-sonnet-4-20250514');
+    const haiku = result.modelBreakdown.find(m => m.model === 'claude-haiku-4-5-20251001');
+    expect(sonnet!.estimatedCostCents).toBeGreaterThan(0);
+    expect(haiku!.estimatedCostCents).toBeGreaterThan(0);
+    // Sonnet is more expensive per token than Haiku
+    expect(sonnet!.estimatedCostCents).toBeGreaterThan(haiku!.estimatedCostCents);
+  });
+
+  it('model costs sum to total cost', () => {
+    const result = transformMessagesUsage(MOCK_BUCKETS, 'Org');
+    const modelCostSum = result.modelBreakdown.reduce((sum, m) => sum + m.estimatedCostCents, 0);
+    expect(modelCostSum).toBeCloseTo(result.estimatedCostCents, 10);
+  });
+
+  it('actor costs sum to total cost', () => {
+    const result = transformMessagesUsage(MOCK_BUCKETS, 'Org');
+    const actorCostSum = result.actors.reduce((sum, a) => sum + a.estimatedCostCents, 0);
+    expect(actorCostSum).toBeCloseTo(result.estimatedCostCents, 10);
+  });
+
+  it('aggregates global model breakdown across all buckets', () => {
+    const result = transformMessagesUsage(MOCK_BUCKETS, 'Org');
     expect(result.modelBreakdown).toHaveLength(2);
 
     const sonnet = result.modelBreakdown.find(m => m.model === 'claude-sonnet-4-20250514');
     expect(sonnet).toBeDefined();
-    expect(sonnet!.inputTokens).toBe(5000 + 3000 + 1000);
+    expect(sonnet!.inputTokens).toBe((5000 + 300 + 200) + (3000 + 50 + 100) + (1000 + 10 + 50));
     expect(sonnet!.outputTokens).toBe(1000 + 800 + 200);
 
     const haiku = result.modelBreakdown.find(m => m.model === 'claude-haiku-4-5-20251001');
@@ -173,62 +194,72 @@ describe('transformClaudeCodeUsage', () => {
     expect(haiku!.inputTokens).toBe(2000);
   });
 
-  it('groups usage by actor', () => {
-    const result = transformClaudeCodeUsage(MOCK_ENTRIES, 'Org');
+  it('groups usage by actor (api_key_id)', () => {
+    const result = transformMessagesUsage(MOCK_BUCKETS, 'Org');
     expect(result.actors).toHaveLength(2);
 
-    const apiActor = result.actors.find(a => a.actorType === 'api_key');
-    expect(apiActor).toBeDefined();
-    expect(apiActor!.actorName).toBe('my-key');
-    // my-key: entry[0] (5000+2000 input) + entry[2] (1000 input)
-    expect(apiActor!.inputTokens).toBe(5000 + 2000 + 1000);
-    expect(apiActor!.outputTokens).toBe(1000 + 500 + 200);
-    expect(apiActor!.estimatedCostCents).toBe(150 + 25 + 30);
+    const key1 = result.actors.find(a => a.actorName === 'key-1');
+    expect(key1).toBeDefined();
+    expect(key1!.actorType).toBe('api_key');
+    // key-1: bucket[0] results (sonnet + haiku) + bucket[2] result (sonnet)
+    expect(key1!.inputTokens).toBe((5000 + 300 + 200) + (2000) + (1000 + 10 + 50));
+    expect(key1!.outputTokens).toBe(1000 + 500 + 200);
+    expect(key1!.estimatedCostCents).toBeGreaterThan(0);
 
-    const userActor = result.actors.find(a => a.actorType === 'user');
-    expect(userActor).toBeDefined();
-    expect(userActor!.actorName).toBe('user@example.com');
-    expect(userActor!.inputTokens).toBe(3000);
-    expect(userActor!.outputTokens).toBe(800);
+    const key2 = result.actors.find(a => a.actorName === 'key-2');
+    expect(key2).toBeDefined();
+    expect(key2!.inputTokens).toBe(3000 + 50 + 100);
+    expect(key2!.outputTokens).toBe(800);
   });
 
   it('includes per-actor model breakdown', () => {
-    const result = transformClaudeCodeUsage(MOCK_ENTRIES, 'Org');
+    const result = transformMessagesUsage(MOCK_BUCKETS, 'Org');
 
-    const apiActor = result.actors.find(a => a.actorType === 'api_key')!;
-    expect(apiActor.modelBreakdown).toHaveLength(2);
-    const apiSonnet = apiActor.modelBreakdown.find(m => m.model === 'claude-sonnet-4-20250514')!;
-    expect(apiSonnet.inputTokens).toBe(5000 + 1000); // from entries 0 and 2
+    const key1 = result.actors.find(a => a.actorName === 'key-1')!;
+    expect(key1.modelBreakdown).toHaveLength(2);
+    const key1Sonnet = key1.modelBreakdown.find(m => m.model === 'claude-sonnet-4-20250514')!;
+    expect(key1Sonnet.inputTokens).toBe((5000 + 300 + 200) + (1000 + 10 + 50));
 
-    const userActor = result.actors.find(a => a.actorType === 'user')!;
-    expect(userActor.modelBreakdown).toHaveLength(1);
-    expect(userActor.modelBreakdown[0].model).toBe('claude-sonnet-4-20250514');
+    const key2 = result.actors.find(a => a.actorName === 'key-2')!;
+    expect(key2.modelBreakdown).toHaveLength(1);
+    expect(key2.modelBreakdown[0].model).toBe('claude-sonnet-4-20250514');
   });
 
-  it('computes date range from entries', () => {
-    const result = transformClaudeCodeUsage(MOCK_ENTRIES, 'Org');
+  it('computes date range from buckets', () => {
+    const result = transformMessagesUsage(MOCK_BUCKETS, 'Org');
     expect(result.periodStart).toEqual(new Date('2026-02-15'));
     expect(result.periodEnd).toEqual(new Date('2026-02-16'));
   });
 
-  it('handles empty entries', () => {
-    const result = transformClaudeCodeUsage([], 'Empty');
+  it('handles empty buckets', () => {
+    const result = transformMessagesUsage([], 'Empty');
     expect(result.accountName).toBe('Empty');
     expect(result.inputTokens).toBe(0);
     expect(result.outputTokens).toBe(0);
+    expect(result.estimatedCostCents).toBe(0);
     expect(result.modelBreakdown).toEqual([]);
     expect(result.actors).toEqual([]);
     expect(result.periodStart).toBeInstanceOf(Date);
     expect(result.periodEnd).toBeInstanceOf(Date);
   });
 
-  it('handles single entry', () => {
-    const result = transformClaudeCodeUsage([MOCK_ENTRIES[0]], 'Single');
-    expect(result.inputTokens).toBe(5000 + 2000);
-    expect(result.outputTokens).toBe(1000 + 500);
+  it('defaults null api_key_id to console', () => {
+    const buckets = [makeBucket('2026-02-15', [
+      makeResult({ api_key_id: null }),
+    ])];
+    const result = transformMessagesUsage(buckets, 'Org');
     expect(result.actors).toHaveLength(1);
-    expect(result.actors[0].actorName).toBe('my-key');
-    expect(result.periodStart).toEqual(new Date('2026-02-15'));
-    expect(result.periodEnd).toEqual(new Date('2026-02-15'));
+    expect(result.actors[0].actorName).toBe('console');
+  });
+
+  it('defaults null model to unknown', () => {
+    const buckets = [makeBucket('2026-02-15', [
+      makeResult({ model: null }),
+    ])];
+    const result = transformMessagesUsage(buckets, 'Org');
+    expect(result.modelBreakdown).toHaveLength(1);
+    expect(result.modelBreakdown[0].model).toBe('unknown');
+    // Unknown model should have 0 cost
+    expect(result.modelBreakdown[0].estimatedCostCents).toBe(0);
   });
 });
