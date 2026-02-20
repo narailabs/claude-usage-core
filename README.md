@@ -173,6 +173,28 @@ Admin API key accounts (`sk-ant-admin-...`) fetch the Claude Code usage report f
 
 Account data is stored encrypted (AES-256-GCM) using a machine-derived key.
 
+## Live testing
+
+The repo includes `scripts/test-live.ts`, a CLI tool that exercises the library against real Anthropic APIs. It serves as both a manual test harness and a working example of how to use the library.
+
+```bash
+# Add an OAuth account from your OS keychain (macOS/Linux)
+npx tsx scripts/test-live.ts save Work
+
+# Or authenticate via browser OAuth flow
+npx tsx scripts/test-live.ts auth Personal
+
+# Add an admin API key account (requires sk-ant-admin-... key)
+npx tsx scripts/test-live.ts admin MyOrg sk-ant-admin-...
+
+# Show usage for all saved accounts
+npx tsx scripts/test-live.ts
+```
+
+Running without arguments lists all saved accounts and fetches usage for each. OAuth accounts show session/weekly usage windows, admin accounts show token counts, model breakdowns, and per-actor (API key / user) usage with estimated costs.
+
+The script source (`scripts/test-live.ts`) demonstrates the full library API: creating a client, saving accounts, fetching usage, and working with the discriminated union response types.
+
 ## Development
 
 ```bash
