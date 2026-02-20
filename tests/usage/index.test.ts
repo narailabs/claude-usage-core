@@ -1,6 +1,6 @@
 // tests/usage/index.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fetchUsage, transformUsageData } from '../../src/usage/index.js';
+import { fetchUsage, fetchProfile, transformUsageData, AuthenticationError } from '../../src/usage/index.js';
 
 describe('fetchUsage', () => {
   beforeEach(() => vi.restoreAllMocks());
@@ -27,6 +27,33 @@ describe('fetchUsage', () => {
   it('throws generic error on other failures', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' }));
     await expect(fetchUsage('tok')).rejects.toThrow('API error: 500');
+  });
+});
+
+describe('fetchProfile', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it('returns profile data on success', async () => {
+    const profileData = {
+      account: { uuid: 'u1', full_name: 'Test', display_name: 'T', email: 'test@example.com', has_claude_max: false, has_claude_pro: true, created_at: '2025-01-01' },
+      organization: { uuid: 'o1', name: 'Org', organization_type: 'personal', billing_type: 'stripe', rate_limit_tier: 'tier1', has_extra_usage_enabled: false, subscription_status: 'active', subscription_created_at: '2025-01-01' },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => profileData,
+    }));
+    const result = await fetchProfile('tok');
+    expect(result.account.email).toBe('test@example.com');
+  });
+
+  it('throws AuthenticationError on 401', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, statusText: 'Unauthorized' }));
+    await expect(fetchProfile('tok')).rejects.toBeInstanceOf(AuthenticationError);
+  });
+
+  it('throws generic error on non-401 failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' }));
+    await expect(fetchProfile('tok')).rejects.toThrow('API error: 500');
   });
 });
 
@@ -66,5 +93,17 @@ describe('transformUsageData', () => {
     expect(result.opus).toBeNull();
     expect(result.sonnet).toBeNull();
     expect(result.extraUsage.isEnabled).toBe(false);
+  });
+
+  it('handles windows with null resets_at', () => {
+    const raw = {
+      five_hour: { utilization: 0.1, resets_at: null },
+      seven_day: { utilization: 0.2, resets_at: '2025-01-07T00:00:00Z' },
+      seven_day_opus: { utilization: 0.3, resets_at: null },
+    };
+    const result = transformUsageData(raw);
+    expect(result.weekly.resetsAt).toBeInstanceOf(Date);
+    expect(result.opus?.percent).toBe(0.3);
+    expect(result.opus?.resetsAt).toBeNull();
   });
 });

@@ -2,11 +2,12 @@
 // scripts/test-live.ts — Live test for claude-usage-core
 //
 // Usage:
-//   npx tsx scripts/test-live.ts              # show usage for all saved accounts
-//   npx tsx scripts/test-live.ts auth <name>  # authenticate via browser and save as <name>
-//   npx tsx scripts/test-live.ts save <name>  # save current keychain credentials as <name>
+//   npx tsx scripts/test-live.ts                     # show usage for all saved accounts
+//   npx tsx scripts/test-live.ts auth <name>         # authenticate via browser and save as <name>
+//   npx tsx scripts/test-live.ts save <name>         # save current keychain credentials as <name>
+//   npx tsx scripts/test-live.ts admin <name> <key>  # save an admin API key (full usage report)
 import { ClaudeUsageClient } from '../src/index.js';
-import type { AccountUsage, UsageWindow } from '../src/index.js';
+import type { AccountUsage, OAuthAccountUsage, AdminAccountUsage, UsageWindow } from '../src/index.js';
 
 const client = new ClaudeUsageClient();
 
@@ -31,8 +32,36 @@ function fmtWindow(w: UsageWindow | null): string {
   return `${formatPercent(w.percent)} (resets ${formatResetTime(w.resetsAt)})`;
 }
 
-function printUsageTable(usages: AccountUsage[]) {
+function formatNumber(n: number): string {
+  return n.toLocaleString();
+}
+
+function formatCost(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+function printTable(header: string[], rows: string[][]) {
+  if (rows.length === 0) return;
+  const widths = header.map((h, i) =>
+    Math.max(h.length, ...rows.map(r => r[i].length))
+  );
+  const sep = widths.map(w => '─'.repeat(w + 2)).join('┼');
+  const pad = (s: string, w: number) => s + ' '.repeat(w - s.length);
+
+  console.log(header.map((h, i) => ` ${pad(h, widths[i])} `).join('│'));
+  console.log(sep);
+  for (const row of rows) {
+    console.log(row.map((c, i) => ` ${pad(c, widths[i])} `).join('│'));
+  }
   console.log();
+}
+
+function printOAuthTable(usages: OAuthAccountUsage[]) {
+  if (usages.length === 0) return;
+
+  console.log('  OAuth Accounts');
+  console.log('  ' + '─'.repeat(60));
+
   const header = ['Account', 'Email', 'Session', 'Weekly', 'Opus', 'Sonnet', 'Extra', 'Error'];
   const rows = usages.map(u => [
     u.accountName,
@@ -47,19 +76,67 @@ function printUsageTable(usages: AccountUsage[]) {
     u.error ?? '',
   ]);
 
-  const widths = header.map((h, i) =>
-    Math.max(h.length, ...rows.map(r => r[i].length))
-  );
+  printTable(header, rows);
+}
 
-  const sep = widths.map(w => '─'.repeat(w + 2)).join('┼');
-  const pad = (s: string, w: number) => s + ' '.repeat(w - s.length);
+function printAdminTable(usages: AdminAccountUsage[]) {
+  if (usages.length === 0) return;
 
-  console.log(header.map((h, i) => ` ${pad(h, widths[i])} `).join('│'));
-  console.log(sep);
-  for (const row of rows) {
-    console.log(row.map((c, i) => ` ${pad(c, widths[i])} `).join('│'));
+  for (const u of usages) {
+    console.log(`  Admin Account: ${u.accountName}`);
+    if (u.error) {
+      console.log(`    Error: ${u.error}`);
+      console.log();
+      continue;
+    }
+
+    const start = u.periodStart.toLocaleDateString();
+    const end = u.periodEnd.toLocaleDateString();
+    console.log(`  Period: ${start} – ${end}`);
+    console.log('  ' + '─'.repeat(60));
+
+    // Totals
+    console.log(`  Totals: ${formatNumber(u.inputTokens)} tokens in, ${formatNumber(u.outputTokens)} tokens out, ${formatCost(u.estimatedCostCents)}`);
+    if (u.cacheCreationTokens > 0 || u.cacheReadTokens > 0) {
+      console.log(`  Cache: ${formatNumber(u.cacheCreationTokens)} creation, ${formatNumber(u.cacheReadTokens)} read`);
+    }
+    console.log();
+
+    // Per-model breakdown
+    if (u.modelBreakdown.length > 0) {
+      console.log('  Model Breakdown');
+      const mHeader = ['Model', 'Input', 'Output', 'Cost'];
+      const mRows = u.modelBreakdown.map(m => [
+        m.model,
+        formatNumber(m.inputTokens),
+        formatNumber(m.outputTokens),
+        formatCost(m.estimatedCostCents),
+      ]);
+      printTable(mHeader, mRows);
+    }
+
+    // Per-actor breakdown
+    if (u.actors.length > 0) {
+      console.log('  Per-Actor Breakdown');
+      const aHeader = ['Type', 'Name', 'Input', 'Output', 'Cost'];
+      const aRows = u.actors.map(a => [
+        a.actorType === 'api_key' ? 'API Key' : 'User',
+        a.actorName,
+        formatNumber(a.inputTokens),
+        formatNumber(a.outputTokens),
+        formatCost(a.estimatedCostCents),
+      ]);
+      printTable(aHeader, aRows);
+    }
   }
+}
+
+function printUsageTables(usages: AccountUsage[]) {
   console.log();
+  const oauth = usages.filter((u): u is OAuthAccountUsage => u.accountType === 'oauth');
+  const admin = usages.filter((u): u is AdminAccountUsage => u.accountType === 'admin');
+  printOAuthTable(oauth);
+  printAdminTable(admin);
 }
 
 async function main() {
@@ -99,25 +176,46 @@ async function main() {
     return;
   }
 
+  // Admin subcommand: save an admin API key account (full usage report)
+  if (command === 'admin') {
+    const name = args[0];
+    const key = args[1];
+    if (!name || !key) {
+      console.error('Usage: test-live.ts admin <account-name> <admin-api-key>');
+      process.exit(1);
+    }
+    try {
+      await client.saveAdminAccount(name, key);
+      console.log(`Saved admin account "${name}".`);
+    } catch (err) {
+      console.error(`Failed to save admin account "${name}": ${(err as Error).message}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   // Default: list accounts and fetch usage
   console.log('=== claude-usage-core live test ===\n');
 
   const accounts = await client.listAccounts();
   if (accounts.length === 0) {
     console.log('No saved accounts. Add one with:');
-    console.log('  npx tsx scripts/test-live.ts save <name>');
+    console.log('  npx tsx scripts/test-live.ts save <name>          # OAuth from keychain');
+    console.log('  npx tsx scripts/test-live.ts auth <name>          # OAuth via browser');
+    console.log('  npx tsx scripts/test-live.ts admin <name> <key>   # Admin API key (full usage)');
     return;
   }
 
   console.log(`Saved accounts (${accounts.length}):`);
   for (const a of accounts) {
     const email = a.email ? ` <${a.email}>` : '';
-    console.log(`  - ${a.name}${email}${a.isActive ? ' (active)' : ''} — saved ${a.savedAt.toLocaleDateString()}`);
+    const typeLabel = a.accountType === 'admin' ? ' [admin]' : ' [oauth]';
+    console.log(`  - ${a.name}${email}${typeLabel}${a.isActive ? ' (active)' : ''} — saved ${a.savedAt.toLocaleDateString()}`);
   }
 
   console.log(`\nFetching usage...`);
   const usages = await client.getAllAccountsUsage();
-  printUsageTable(usages);
+  printUsageTables(usages);
 }
 
 main().catch(err => {

@@ -17,3 +17,10 @@ export class StorageError extends ClaudeUsageError {
     super(`Storage error: ${detail}`);
   }
 }
+
+export class AuthenticationError extends Error {
+  constructor(public readonly statusCode: number) {
+    super(`Authentication failed (HTTP ${statusCode})`);
+    this.name = 'AuthenticationError';
+  }
+}

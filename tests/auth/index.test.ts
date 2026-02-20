@@ -1,7 +1,12 @@
 // tests/auth/index.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
+import { exec } from 'node:child_process';
 import { generatePKCE, authorize, OAUTH_CLIENT_ID, OAUTH_TOKEN_URL } from '../../src/auth/index.js';
+
+vi.mock('node:child_process', () => ({
+  exec: vi.fn(),
+}));
 
 describe('generatePKCE', () => {
   it('produces a code_verifier of correct length', () => {
@@ -149,6 +154,78 @@ describe('authorize', () => {
     });
 
     await rejection;
+  });
+
+  it('returns 404 for non-callback paths', async () => {
+    const authPromise = authorize({ timeoutMs: 1000, _openBrowser: browserSpy });
+    authPromise.catch(() => {}); // suppress unhandled rejection
+    await new Promise(r => setTimeout(r, 100));
+
+    const { port } = extractFromUrl(capturedUrl);
+
+    await new Promise<void>((resolve) => {
+      http.get(`http://localhost:${port}/not-callback`, (res) => {
+        expect(res.statusCode).toBe(404);
+        res.resume();
+        res.on('end', resolve);
+      });
+    });
+
+    await expect(authPromise).rejects.toThrow('timed out');
+  });
+
+  it('rejects when callback has no code parameter', async () => {
+    const authPromise = authorize({ timeoutMs: 5000, _openBrowser: browserSpy });
+    const rejection = expect(authPromise).rejects.toThrow('missing code');
+    await new Promise(r => setTimeout(r, 100));
+
+    const { port, state } = extractFromUrl(capturedUrl);
+
+    await new Promise<void>((resolve) => {
+      http.get(`http://localhost:${port}/callback?state=${state}`, (res) => {
+        expect(res.statusCode).toBe(400);
+        res.resume();
+        res.on('end', resolve);
+      });
+    });
+
+    await rejection;
+  });
+
+  it('uses default browser opener when _openBrowser not provided', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        access_token: 'test-tok',
+        refresh_token: 'test-rt',
+        expires_in: 3600,
+      }),
+    });
+
+    const authPromise = authorize({ timeoutMs: 5000 });
+    await new Promise(r => setTimeout(r, 100));
+
+    // Default openBrowser should have called exec
+    expect(vi.mocked(exec)).toHaveBeenCalledOnce();
+    const cmd = vi.mocked(exec).mock.calls[0][0] as string;
+    expect(cmd).toMatch(/^open "/); // macOS
+
+    // Extract URL from the exec command to complete the flow
+    const urlMatch = cmd.match(/open "(.+)"/);
+    const authorizeUrl = urlMatch![1];
+    const parsed = new URL(authorizeUrl);
+    const port = parsed.searchParams.get('redirect_uri')!.match(/:(\d+)\//)?.[1];
+    const state = parsed.searchParams.get('state')!;
+
+    await new Promise<void>((resolve, reject) => {
+      http.get(
+        `http://localhost:${port}/callback?code=test-code&state=${state}`,
+        (res) => { res.resume(); res.on('end', resolve); },
+      ).on('error', reject);
+    });
+
+    const credentials = await authPromise;
+    expect(JSON.parse(credentials).claudeAiOauth.accessToken).toBe('test-tok');
   });
 
   it('rejects when token exchange fails', async () => {

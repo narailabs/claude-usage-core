@@ -4,14 +4,16 @@ import { join } from 'node:path';
 import { AccountStore } from './storage/index.js';
 import { createCredentialReader, type Platform } from './credentials/index.js';
 import { validateToken, refreshToken } from './tokens/index.js';
-import { fetchProfile, fetchUsage, transformUsageData, AuthenticationError } from './usage/index.js';
+import { fetchProfile, fetchUsage, transformUsageData } from './usage/index.js';
+import { fetchClaudeCodeUsage, transformClaudeCodeUsage } from './admin/index.js';
 import { authorize, type AuthorizeOptions } from './auth/index.js';
-import { AccountNotFoundError } from './errors.js';
-import type { Account, AccountUsage, ClaudeUsageClientOptions, ClaudeCredentials } from './types.js';
+import { AccountNotFoundError, AuthenticationError } from './errors.js';
+import type { Account, AccountUsage, OAuthAccountUsage, AdminAccountUsage, ClaudeUsageClientOptions, ClaudeCredentials, AdminCredentials } from './types.js';
 
 const DEFAULT_STORAGE = join(homedir(), '.claude-usage', 'accounts.enc');
 
-const EMPTY_USAGE: Omit<AccountUsage, 'accountName' | 'error'> = {
+const EMPTY_OAUTH_USAGE: Omit<OAuthAccountUsage, 'accountName' | 'error'> = {
+  accountType: 'oauth',
   session: { percent: 0, resetsAt: null },
   weekly: { percent: 0, resetsAt: null },
   opus: null,
@@ -50,6 +52,7 @@ export class ClaudeUsageClient {
     return data.accounts.map(a => ({
       name: a.name,
       email: a.email,
+      accountType: a.accountType ?? 'oauth',
       isActive: a.name === data.activeAccountName,
       savedAt: new Date(a.savedAt),
     }));
@@ -77,7 +80,17 @@ export class ClaudeUsageClient {
       // Profile fetch is best-effort — save without email
     }
 
-    await this.store.saveAccount(name, creds, email);
+    await this.store.saveAccount(name, creds, email, 'oauth');
+  }
+
+  async saveAdminAccount(name: string, adminApiKey: string): Promise<void> {
+    if (!adminApiKey.startsWith('sk-ant-admin')) {
+      throw new Error('Invalid admin API key format — must start with "sk-ant-admin"');
+    }
+    // Validate the key works by fetching usage (will throw on 401)
+    await fetchClaudeCodeUsage(adminApiKey);
+    const creds: AdminCredentials = { adminApiKey };
+    await this.store.saveAccount(name, JSON.stringify(creds), undefined, 'admin');
   }
 
   async switchAccount(name: string): Promise<void> {
@@ -95,7 +108,7 @@ export class ClaudeUsageClient {
   async getAllAccountsUsage(): Promise<AccountUsage[]> {
     const data = await this.store.load();
     return Promise.all(
-      data.accounts.map(a => this._fetchAccountUsage(a.name, a.email, a.credentials))
+      data.accounts.map(a => this._fetchAccountUsage(a))
     );
   }
 
@@ -103,10 +116,42 @@ export class ClaudeUsageClient {
     const data = await this.store.load();
     const account = data.accounts.find(a => a.name === name);
     if (!account) throw new AccountNotFoundError(name);
-    return this._fetchAccountUsage(account.name, account.email, account.credentials);
+    return this._fetchAccountUsage(account);
   }
 
-  private async _fetchAccountUsage(name: string, email: string | undefined, credentialsJson: string): Promise<AccountUsage> {
+  private async _fetchAccountUsage(account: { name: string; email?: string; credentials: string; accountType?: string }): Promise<AccountUsage> {
+    const accountType = account.accountType ?? 'oauth';
+
+    if (accountType === 'admin') {
+      return this._fetchAdminAccountUsage(account.name, account.credentials);
+    }
+    return this._fetchOAuthAccountUsage(account.name, account.email, account.credentials);
+  }
+
+  private async _fetchAdminAccountUsage(name: string, credentialsJson: string): Promise<AdminAccountUsage> {
+    try {
+      const creds: AdminCredentials = JSON.parse(credentialsJson);
+      const entries = await fetchClaudeCodeUsage(creds.adminApiKey);
+      return { accountType: 'admin', ...transformClaudeCodeUsage(entries, name) };
+    } catch (err) {
+      return {
+        accountType: 'admin',
+        accountName: name,
+        periodStart: new Date(),
+        periodEnd: new Date(),
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        estimatedCostCents: 0,
+        modelBreakdown: [],
+        actors: [],
+        error: (err as Error).message,
+      };
+    }
+  }
+
+  private async _fetchOAuthAccountUsage(name: string, email: string | undefined, credentialsJson: string): Promise<OAuthAccountUsage> {
     try {
       let creds = credentialsJson;
       const validation = validateToken(creds);
@@ -118,7 +163,7 @@ export class ClaudeUsageClient {
           creds = refreshed.newCredentials;
           await this.store.saveAccount(name, creds);
         } else {
-          return { accountName: name, email, ...EMPTY_USAGE, error: 'Token expired — refresh failed' };
+          return { ...EMPTY_OAUTH_USAGE, accountName: name, email, error: 'Token expired — refresh failed' };
         }
       }
       // Proactively refresh if < 5 min left
@@ -132,10 +177,10 @@ export class ClaudeUsageClient {
 
       const parsed: ClaudeCredentials = JSON.parse(creds);
       const token = parsed.claudeAiOauth?.accessToken;
-      if (!token) return { accountName: name, email, ...EMPTY_USAGE, error: 'No access token' };
+      if (!token) return { ...EMPTY_OAUTH_USAGE, accountName: name, email, error: 'No access token' };
 
       const usage = await fetchUsage(token, this.betaVersion);
-      return { accountName: name, email, ...transformUsageData(usage) };
+      return { accountType: 'oauth', ...transformUsageData(usage), accountName: name, email };
     } catch (err) {
       // On 401, attempt refresh once
       if (err instanceof AuthenticationError) {
@@ -147,13 +192,13 @@ export class ClaudeUsageClient {
             const token = parsed.claudeAiOauth?.accessToken;
             if (token) {
               const usage = await fetchUsage(token, this.betaVersion);
-              return { accountName: name, email, ...transformUsageData(usage) };
+              return { accountType: 'oauth', ...transformUsageData(usage), accountName: name, email };
             }
           }
         } catch { /* fall through */ }
-        return { accountName: name, email, ...EMPTY_USAGE, error: 'Authentication failed' };
+        return { ...EMPTY_OAUTH_USAGE, accountName: name, email, error: 'Authentication failed' };
       }
-      return { accountName: name, email, ...EMPTY_USAGE, error: (err as Error).message };
+      return { ...EMPTY_OAUTH_USAGE, accountName: name, email, error: (err as Error).message };
     }
   }
 
