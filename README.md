@@ -1,17 +1,19 @@
-# claude-usage-core
+# @narai/claude-usage-core
 
 Node.js TypeScript library for monitoring [Claude Code](https://claude.ai/code) usage across multiple accounts. Supports OAuth-based Claude Code subscription accounts and Anthropic admin API key accounts.
+
+[npm](https://www.npmjs.com/package/@narai/claude-usage-core) | [GitHub](https://github.com/narailabs/claude-usage-core)
 
 ## Install
 
 ```bash
-npm install claude-usage-core
+npm install @narai/claude-usage-core
 ```
 
 ## Quick start
 
 ```ts
-import { ClaudeUsageClient } from 'claude-usage-core';
+import { ClaudeUsageClient } from '@narai/claude-usage-core';
 
 const client = new ClaudeUsageClient();
 
@@ -132,7 +134,7 @@ const token = await client.getSystemToken();
 ### Standalone OAuth
 
 ```ts
-import { authorize } from 'claude-usage-core';
+import { authorize } from '@narai/claude-usage-core';
 
 // Run the OAuth PKCE flow directly — returns a credentials JSON string
 const credentials = await authorize({ timeoutMs: 120_000 });
@@ -141,7 +143,7 @@ const credentials = await authorize({ timeoutMs: 120_000 });
 ### Error handling
 
 ```ts
-import { AccountNotFoundError, StorageError, AuthenticationError, ClaudeUsageError } from 'claude-usage-core';
+import { AccountNotFoundError, StorageError, AuthenticationError, ClaudeUsageError } from '@narai/claude-usage-core';
 
 try {
   await client.getAccountUsage('Missing');
