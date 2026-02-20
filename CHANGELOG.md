@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.2
+
+- Updated README with `@narai` scoped package name, install instructions, and import examples
+- Added npm and GitHub links to README
+
 ## 1.0.0
 
 - Renamed package to `@narai/claude-usage-core`
