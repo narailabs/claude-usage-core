@@ -1,6 +1,7 @@
 // src/admin/index.ts
 import { AuthenticationError } from '../errors.js';
 import type { AdminAccountUsage, ActorUsage, ModelUsageBreakdown } from '../types.js';
+import { estimateCostCents } from './pricing.js';
 
 const API_BASE = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -90,13 +91,14 @@ export async function fetchMessagesUsage(
   return buckets;
 }
 
-function addToModelMap(map: Map<string, ModelUsageBreakdown>, model: string, input: number, output: number, cacheCreation: number, cacheRead: number): void {
+function addToModelMap(map: Map<string, ModelUsageBreakdown>, model: string, input: number, output: number, cacheCreation: number, cacheRead: number, cost: number): void {
   const existing = map.get(model);
   if (existing) {
     existing.inputTokens += input;
     existing.outputTokens += output;
     existing.cacheCreationTokens += cacheCreation;
     existing.cacheReadTokens += cacheRead;
+    existing.estimatedCostCents += cost;
   } else {
     map.set(model, {
       model,
@@ -104,7 +106,7 @@ function addToModelMap(map: Map<string, ModelUsageBreakdown>, model: string, inp
       outputTokens: output,
       cacheCreationTokens: cacheCreation,
       cacheReadTokens: cacheRead,
-      estimatedCostCents: 0,
+      estimatedCostCents: cost,
     });
   }
 }
@@ -133,6 +135,7 @@ export function transformMessagesUsage(
   let totalOutput = 0;
   let totalCacheCreation = 0;
   let totalCacheRead = 0;
+  let totalCost = 0;
   let minDate: string | null = null;
   let maxDate: string | null = null;
 
@@ -148,10 +151,17 @@ export function transformMessagesUsage(
       const cacheCreation = result.cache_creation.ephemeral_5m_input_tokens + result.cache_creation.ephemeral_1h_input_tokens;
       const cacheRead = result.cache_read_input_tokens;
 
+      const model = result.model ?? 'unknown';
+      const uncachedInput = result.uncached_input_tokens;
+      const cache5m = result.cache_creation.ephemeral_5m_input_tokens;
+      const cache1h = result.cache_creation.ephemeral_1h_input_tokens;
+      const cost = estimateCostCents(model, uncachedInput, cacheRead, cache5m, cache1h, output);
+
       totalInput += input;
       totalOutput += output;
       totalCacheCreation += cacheCreation;
       totalCacheRead += cacheRead;
+      totalCost += cost;
 
       // Actor aggregation (by API key ID)
       const actorKey = result.api_key_id ?? 'console';
@@ -173,10 +183,10 @@ export function transformMessagesUsage(
       actor.outputTokens += output;
       actor.cacheCreationTokens += cacheCreation;
       actor.cacheReadTokens += cacheRead;
+      actor.estimatedCostCents += cost;
 
-      const model = result.model ?? 'unknown';
-      addToModelMap(globalModelMap, model, input, output, cacheCreation, cacheRead);
-      addToModelMap(actor.modelMap, model, input, output, cacheCreation, cacheRead);
+      addToModelMap(globalModelMap, model, input, output, cacheCreation, cacheRead, cost);
+      addToModelMap(actor.modelMap, model, input, output, cacheCreation, cacheRead, cost);
     }
   }
 
@@ -199,7 +209,7 @@ export function transformMessagesUsage(
     outputTokens: totalOutput,
     cacheCreationTokens: totalCacheCreation,
     cacheReadTokens: totalCacheRead,
-    estimatedCostCents: 0,
+    estimatedCostCents: totalCost,
     modelBreakdown: Array.from(globalModelMap.values()),
     actors,
   };
