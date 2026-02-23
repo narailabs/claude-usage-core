@@ -1,55 +1,28 @@
 // tests/auth/index.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import http from 'node:http';
-import { exec } from 'node:child_process';
-import { generatePKCE, authorize, OAUTH_CLIENT_ID, OAUTH_TOKEN_URL } from '../../src/auth/index.js';
+import { EventEmitter } from 'node:events';
+import { authorize, OAUTH_CLIENT_ID, OAUTH_TOKEN_URL } from '../../src/auth/index.js';
 
-vi.mock('node:child_process', () => ({
-  exec: vi.fn(),
-}));
+vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 
-describe('generatePKCE', () => {
-  it('produces a code_verifier of correct length', () => {
-    const { codeVerifier } = generatePKCE();
-    // 32 random bytes base64url-encoded = 43 chars
-    expect(codeVerifier).toHaveLength(43);
+import { spawn } from 'node:child_process';
+
+const FAKE_TOKEN = 'sk-ant-oat01-fake-long-lived-token-abc123';
+
+function makeChild(output: string, exitCode: number | null = 0) {
+  const child = new EventEmitter() as ReturnType<typeof spawn>;
+  const stdout = new EventEmitter();
+  (child as any).stdout = stdout;
+  (child as any).kill = vi.fn();
+  setImmediate(() => {
+    stdout.emit('data', Buffer.from(output));
+    child.emit('close', exitCode);
   });
-
-  it('produces a valid S256 code_challenge', async () => {
-    const { codeVerifier, codeChallenge } = generatePKCE();
-    const { createHash } = await import('node:crypto');
-    const expected = createHash('sha256')
-      .update(codeVerifier)
-      .digest('base64url');
-    expect(codeChallenge).toBe(expected);
-  });
-
-  it('generates unique values each call', () => {
-    const a = generatePKCE();
-    const b = generatePKCE();
-    expect(a.codeVerifier).not.toBe(b.codeVerifier);
-    expect(a.codeChallenge).not.toBe(b.codeChallenge);
-  });
-});
+  return child;
+}
 
 describe('authorize', () => {
-  let fetchSpy: ReturnType<typeof vi.fn>;
-  /** Captured authorize URL from the _openBrowser callback */
-  let capturedUrl: string;
-  const browserSpy = vi.fn((url: string) => { capturedUrl = url; });
-
-  function extractFromUrl(url: string) {
-    const parsed = new URL(url);
-    const port = parsed.searchParams.get('redirect_uri')!.match(/:(\d+)\//)?.[1];
-    const state = parsed.searchParams.get('state')!;
-    return { port: port!, state };
-  }
-
   beforeEach(() => {
-    capturedUrl = '';
-    browserSpy.mockClear();
-    fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
@@ -57,268 +30,71 @@ describe('authorize', () => {
     vi.restoreAllMocks();
   });
 
-  it('exchanges code for tokens and returns long-lived credentials', async () => {
-    // First call: token exchange; second call: create long-lived API key
-    fetchSpy
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          access_token: 'short-lived-tok',
-          refresh_token: 'test-refresh-tok',
-          expires_in: 3600,
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          key: 'sk-ant-oat01-long-lived-key',
-          created_at: '2025-01-01T00:00:00Z',
-          expires_at: '2026-01-01T00:00:00Z',
-        }),
-      });
+  it('spawns claude setup-token and returns credentials from stdout token', async () => {
+    vi.mocked(spawn).mockReturnValue(makeChild(`Setting up...\n${FAKE_TOKEN}\nDone.\n`));
 
-    const authPromise = authorize({ timeoutMs: 5000, _openBrowser: browserSpy });
+    const result = await authorize();
+    const creds = JSON.parse(result);
 
-    // Give the server a moment to start
-    await new Promise(r => setTimeout(r, 100));
-
-    expect(browserSpy).toHaveBeenCalledOnce();
-    const { port, state } = extractFromUrl(capturedUrl);
-
-    // Simulate the OAuth callback
-    await new Promise<void>((resolve, reject) => {
-      http.get(
-        `http://localhost:${port}/callback?code=test-code&state=${state}`,
-        (res) => {
-          expect(res.statusCode).toBe(200);
-          res.resume();
-          res.on('end', resolve);
-        },
-      ).on('error', reject);
-    });
-
-    const credentials = await authPromise;
-    const parsed = JSON.parse(credentials);
-
-    // Should use the long-lived key, not the short-lived token
-    expect(parsed.claudeAiOauth.accessToken).toBe('sk-ant-oat01-long-lived-key');
-    expect(parsed.claudeAiOauth.refreshToken).toBe('test-refresh-tok');
-    expect(parsed.claudeAiOauth.expiresAt).toBe('2026-01-01T00:00:00Z');
-
-    // Verify both fetch calls
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-
-    // First call: token exchange
-    const [tokenUrl, tokenOpts] = fetchSpy.mock.calls[0];
-    expect(tokenUrl).toBe(OAUTH_TOKEN_URL);
-    const body = JSON.parse(tokenOpts.body);
-    expect(body.grant_type).toBe('authorization_code');
-    expect(body.client_id).toBe(OAUTH_CLIENT_ID);
-    expect(body.code).toBe('test-code');
-    expect(body.code_verifier).toBeDefined();
-    expect(body.state).toBeDefined();
-
-    // Second call: create long-lived API key
-    const [apiKeyUrl, apiKeyOpts] = fetchSpy.mock.calls[1];
-    expect(apiKeyUrl).toBe('https://api.anthropic.com/api/oauth/claude_cli/create_api_key');
-    expect(apiKeyOpts.headers.Authorization).toBe('Bearer short-lived-tok');
-    expect(apiKeyOpts.headers['anthropic-beta']).toBe('oauth-2025-04-20');
-    const apiKeyBody = JSON.parse(apiKeyOpts.body);
-    expect(apiKeyBody.name).toMatch(/^claude-usage-/);
+    expect(creds.claudeAiOauth.accessToken).toBe(FAKE_TOKEN);
+    expect(creds.claudeAiOauth.refreshToken).toBe('');
+    const expiry = new Date(creds.claudeAiOauth.expiresAt);
+    expect(expiry.getTime()).toBeGreaterThan(Date.now() + 364 * 24 * 60 * 60 * 1000);
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      'claude', ['setup-token'],
+      expect.objectContaining({ stdio: ['inherit', 'pipe', 'inherit'] })
+    );
   });
 
-  it('falls back to short-lived token when long-lived creation fails', async () => {
-    fetchSpy
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          access_token: 'short-lived-tok',
-          refresh_token: 'test-refresh-tok',
-          expires_in: 3600,
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 403,
-        text: async () => 'Forbidden',
-      });
+  it('uses _claudeCommand override', async () => {
+    vi.mocked(spawn).mockReturnValue(makeChild(`${FAKE_TOKEN}\n`));
 
-    const authPromise = authorize({ timeoutMs: 5000, _openBrowser: browserSpy });
-    await new Promise(r => setTimeout(r, 100));
+    await authorize({ _claudeCommand: '/custom/path/claude' });
 
-    const { port, state } = extractFromUrl(capturedUrl);
-
-    await new Promise<void>((resolve, reject) => {
-      http.get(
-        `http://localhost:${port}/callback?code=test-code&state=${state}`,
-        (res) => { res.resume(); res.on('end', resolve); },
-      ).on('error', reject);
-    });
-
-    const credentials = await authPromise;
-    const parsed = JSON.parse(credentials);
-
-    // Falls back to short-lived token
-    expect(parsed.claudeAiOauth.accessToken).toBe('short-lived-tok');
-    expect(parsed.claudeAiOauth.refreshToken).toBe('test-refresh-tok');
-    // expiresAt should be computed from expires_in, not from the API key response
-    expect(parsed.claudeAiOauth.expiresAt).toBeDefined();
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      '/custom/path/claude', ['setup-token'],
+      expect.anything()
+    );
   });
 
-  it('rejects on state mismatch', async () => {
-    const authPromise = authorize({ timeoutMs: 5000, _openBrowser: browserSpy });
-    // Attach rejection handler early to prevent unhandled rejection warning
-    const rejection = expect(authPromise).rejects.toThrow('state mismatch');
-    await new Promise(r => setTimeout(r, 100));
+  it('throws AuthenticationError when process exits non-zero', async () => {
+    vi.mocked(spawn).mockReturnValue(makeChild('Error: something went wrong\n', 1));
 
-    const { port } = extractFromUrl(capturedUrl);
-
-    // Send callback with wrong state
-    await new Promise<void>((resolve) => {
-      http.get(
-        `http://localhost:${port}/callback?code=test-code&state=wrong-state`,
-        (res) => {
-          expect(res.statusCode).toBe(400);
-          res.resume();
-          res.on('end', resolve);
-        },
-      );
-    });
-
-    await rejection;
+    await expect(authorize()).rejects.toThrow('exited with code 1');
   });
 
-  it('rejects on timeout', async () => {
-    await expect(
-      authorize({ timeoutMs: 200, _openBrowser: browserSpy })
-    ).rejects.toThrow('timed out');
+  it('throws AuthenticationError when stdout has no token', async () => {
+    vi.mocked(spawn).mockReturnValue(makeChild('Setup complete. Token saved to keychain.\n'));
+
+    await expect(authorize()).rejects.toThrow('No token found');
   });
 
-  it('rejects when OAuth returns an error', async () => {
-    const authPromise = authorize({ timeoutMs: 5000, _openBrowser: browserSpy });
-    const rejection = expect(authPromise).rejects.toThrow('access_denied');
-    await new Promise(r => setTimeout(r, 100));
+  it('throws and kills process on timeout', async () => {
+    const child = new EventEmitter() as ReturnType<typeof spawn>;
+    const stdout = new EventEmitter();
+    (child as any).stdout = stdout;
+    const killSpy = vi.fn();
+    (child as any).kill = killSpy;
+    // Never emits close — simulates a hung process
+    vi.mocked(spawn).mockReturnValue(child);
 
-    const { port } = extractFromUrl(capturedUrl);
-
-    await new Promise<void>((resolve) => {
-      http.get(
-        `http://localhost:${port}/callback?error=access_denied`,
-        (res) => {
-          expect(res.statusCode).toBe(400);
-          res.resume();
-          res.on('end', resolve);
-        },
-      );
-    });
-
-    await rejection;
+    await expect(authorize({ timeoutMs: 100 })).rejects.toThrow('timed out');
+    expect(killSpy).toHaveBeenCalled();
   });
 
-  it('returns 404 for non-callback paths', async () => {
-    const authPromise = authorize({ timeoutMs: 1000, _openBrowser: browserSpy });
-    authPromise.catch(() => {}); // suppress unhandled rejection
-    await new Promise(r => setTimeout(r, 100));
+  it('throws AuthenticationError on spawn error', async () => {
+    const child = new EventEmitter() as ReturnType<typeof spawn>;
+    const stdout = new EventEmitter();
+    (child as any).stdout = stdout;
+    (child as any).kill = vi.fn();
+    setImmediate(() => child.emit('error', new Error('spawn ENOENT')));
+    vi.mocked(spawn).mockReturnValue(child);
 
-    const { port } = extractFromUrl(capturedUrl);
-
-    await new Promise<void>((resolve) => {
-      http.get(`http://localhost:${port}/not-callback`, (res) => {
-        expect(res.statusCode).toBe(404);
-        res.resume();
-        res.on('end', resolve);
-      });
-    });
-
-    await expect(authPromise).rejects.toThrow('timed out');
+    await expect(authorize()).rejects.toThrow('spawn ENOENT');
   });
 
-  it('rejects when callback has no code parameter', async () => {
-    const authPromise = authorize({ timeoutMs: 5000, _openBrowser: browserSpy });
-    const rejection = expect(authPromise).rejects.toThrow('missing code');
-    await new Promise(r => setTimeout(r, 100));
-
-    const { port, state } = extractFromUrl(capturedUrl);
-
-    await new Promise<void>((resolve) => {
-      http.get(`http://localhost:${port}/callback?state=${state}`, (res) => {
-        expect(res.statusCode).toBe(400);
-        res.resume();
-        res.on('end', resolve);
-      });
-    });
-
-    await rejection;
-  });
-
-  it('uses default browser opener when _openBrowser not provided', async () => {
-    fetchSpy
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          access_token: 'test-tok',
-          refresh_token: 'test-rt',
-          expires_in: 3600,
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          key: 'sk-ant-oat01-long-key',
-          created_at: '2025-01-01T00:00:00Z',
-          expires_at: '2026-01-01T00:00:00Z',
-        }),
-      });
-
-    const authPromise = authorize({ timeoutMs: 5000 });
-    await new Promise(r => setTimeout(r, 100));
-
-    // Default openBrowser should have called exec
-    expect(vi.mocked(exec)).toHaveBeenCalledOnce();
-    const cmd = vi.mocked(exec).mock.calls[0][0] as string;
-    expect(cmd).toMatch(/^open "/); // macOS
-
-    // Extract URL from the exec command to complete the flow
-    const urlMatch = cmd.match(/open "(.+)"/);
-    const authorizeUrl = urlMatch![1];
-    const parsed = new URL(authorizeUrl);
-    const port = parsed.searchParams.get('redirect_uri')!.match(/:(\d+)\//)?.[1];
-    const state = parsed.searchParams.get('state')!;
-
-    await new Promise<void>((resolve, reject) => {
-      http.get(
-        `http://localhost:${port}/callback?code=test-code&state=${state}`,
-        (res) => { res.resume(); res.on('end', resolve); },
-      ).on('error', reject);
-    });
-
-    const credentials = await authPromise;
-    expect(JSON.parse(credentials).claudeAiOauth.accessToken).toBe('sk-ant-oat01-long-key');
-  });
-
-  it('rejects when token exchange fails', async () => {
-    fetchSpy.mockResolvedValue({
-      ok: false,
-      status: 400,
-      text: async () => 'invalid_grant',
-    });
-
-    const authPromise = authorize({ timeoutMs: 5000, _openBrowser: browserSpy });
-    const rejection = expect(authPromise).rejects.toThrow('Token exchange failed');
-    await new Promise(r => setTimeout(r, 100));
-
-    const { port, state } = extractFromUrl(capturedUrl);
-
-    await new Promise<void>((resolve) => {
-      http.get(
-        `http://localhost:${port}/callback?code=bad-code&state=${state}`,
-        (res) => {
-          res.resume();
-          res.on('end', resolve);
-        },
-      );
-    });
-
-    await rejection;
+  it('still exports OAUTH_CLIENT_ID and OAUTH_TOKEN_URL', () => {
+    expect(OAUTH_CLIENT_ID).toMatch(/^[0-9a-f-]+$/);
+    expect(OAUTH_TOKEN_URL).toMatch(/^https:/);
   });
 });
