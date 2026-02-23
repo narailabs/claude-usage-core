@@ -26,6 +26,16 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
   const claudeCommand = options?._claudeCommand ?? 'claude';
 
   return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const settle = (fn: (v: any) => void, value: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+
     const child = spawn(claudeCommand, ['setup-token'], {
       stdio: ['inherit', 'pipe', 'inherit'],
     });
@@ -36,27 +46,24 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
       stdout += chunk.toString();
     });
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       (child as any).kill();
-      reject(new Error('claude setup-token timed out'));
+      settle(reject, new Error('claude setup-token timed out'));
     }, timeoutMs);
 
     child.on('error', (err: Error) => {
-      clearTimeout(timer);
-      reject(new Error(`Failed to run claude setup-token: ${err.message}`));
+      settle(reject, new Error(`Failed to run claude setup-token: ${err.message}`));
     });
 
     child.on('close', (code: number | null) => {
-      clearTimeout(timer);
-
       if (code !== 0) {
-        reject(new Error(`claude setup-token exited with code ${code}`));
+        settle(reject, new Error(`claude setup-token exited with code ${code}`));
         return;
       }
 
       const match = stdout.match(/^(sk-ant-\S+)$/m);
       if (!match) {
-        reject(new Error('No token found in claude setup-token output'));
+        settle(reject, new Error('No token found in claude setup-token output'));
         return;
       }
 
@@ -68,7 +75,7 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
         },
       };
 
-      resolve(JSON.stringify(credentials));
+      settle(resolve, JSON.stringify(credentials));
     });
   });
 }

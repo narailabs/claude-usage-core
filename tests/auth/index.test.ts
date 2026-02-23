@@ -57,13 +57,13 @@ describe('authorize', () => {
     );
   });
 
-  it('throws AuthenticationError when process exits non-zero', async () => {
+  it('throws when process exits non-zero', async () => {
     vi.mocked(spawn).mockReturnValue(makeChild('Error: something went wrong\n', 1));
 
     await expect(authorize()).rejects.toThrow('exited with code 1');
   });
 
-  it('throws AuthenticationError when stdout has no token', async () => {
+  it('throws when stdout has no token', async () => {
     vi.mocked(spawn).mockReturnValue(makeChild('Setup complete. Token saved to keychain.\n'));
 
     await expect(authorize()).rejects.toThrow('No token found');
@@ -82,7 +82,7 @@ describe('authorize', () => {
     expect(killSpy).toHaveBeenCalled();
   });
 
-  it('throws AuthenticationError on spawn error', async () => {
+  it('throws on spawn error', async () => {
     const child = new EventEmitter() as ReturnType<typeof spawn>;
     const stdout = new EventEmitter();
     (child as any).stdout = stdout;
