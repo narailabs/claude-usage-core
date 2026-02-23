@@ -67,6 +67,16 @@ export class AccountStore {
     return true;
   }
 
+  async renameAccount(oldName: string, newName: string): Promise<boolean> {
+    const data = await this.load();
+    const account = data.accounts.find(a => a.name === oldName);
+    if (!account) return false;
+    account.name = newName;
+    if (data.activeAccountName === oldName) data.activeAccountName = newName;
+    await this.save(data);
+    return true;
+  }
+
   async setActiveAccount(name: string | null): Promise<void> {
     const data = await this.load();
     data.activeAccountName = name;
