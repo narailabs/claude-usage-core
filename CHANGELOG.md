@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.1
+
+- Fixed `authorize()` token parsing — use `/(sk-ant-\S+)/` to match token anywhere in stdout, not just as a bare line
+- Added `npm run e2e` script for manual end-to-end testing of the browser auth flow
+
 ## 1.3.0
 
 - Replaced custom PKCE OAuth flow with a wrapper around `claude setup-token` CLI — resolves 403 errors on personal accounts that blocked long-lived token creation

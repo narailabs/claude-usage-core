@@ -18,7 +18,7 @@ export interface AuthorizeOptions {
 /**
  * Obtain a long-lived token by running `claude setup-token`.
  * The CLI opens the user's browser, handles the OAuth flow, and prints
- * the resulting `sk-ant-...` token to stdout on its own line.
+ * the resulting `sk-ant-...` token to stdout.
  * Returns a ClaudeCredentials JSON string with a ~1-year expiry.
  */
 export async function authorize(options?: AuthorizeOptions): Promise<string> {
@@ -61,7 +61,7 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
         return;
       }
 
-      const match = stdout.match(/^(sk-ant-\S+)$/m);
+      const match = stdout.match(/(sk-ant-\S+)/);
       if (!match) {
         settle(reject, new Error('No token found in claude setup-token output'));
         return;
