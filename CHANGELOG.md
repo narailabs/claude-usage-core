@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.2
+
+- Added `org:create_api_key` scope to OAuth flow — required for creating long-lived tokens
+
 ## 1.2.1
 
 - Fixed `refreshToken` to use OAuth browser flow directly instead of shelling out to `claude setup-token` (works in VS Code extension host)
