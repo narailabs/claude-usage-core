@@ -1,6 +1,6 @@
 {
   "name": "@narai/claude-usage-core",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Monitor Claude Code usage across multiple accounts — OAuth auth, token lifecycle, encrypted storage",
   "author": "Narai Labs",
   "repository": {
