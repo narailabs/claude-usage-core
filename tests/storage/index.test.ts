@@ -163,5 +163,12 @@ describe('AccountStore', () => {
       const result = await store.renameAccount('no-such', 'new');
       expect(result).toBe(false);
     });
+
+    it('throws when target name already exists', async () => {
+      const store = new AccountStore(join(tmpDir, 'accounts.enc'));
+      await store.saveAccount('first', '{"a":1}', undefined, 'oauth');
+      await store.saveAccount('second', '{"b":2}', undefined, 'oauth');
+      await expect(store.renameAccount('first', 'second')).rejects.toThrow('already exists');
+    });
   });
 });

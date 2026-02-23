@@ -549,5 +549,14 @@ describe('ClaudeUsageClient', () => {
 
       await expect(client.refreshToken('Work')).rejects.toThrow('claude not found');
     });
+
+    it('throws for admin accounts', async () => {
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ data: [], has_more: false }) })
+      );
+      const client = makeClient();
+      await client.saveAdminAccount('Admin', ADMIN_KEY);
+      await expect(client.refreshToken('Admin')).rejects.toThrow('Cannot refresh token for an admin account');
+    });
   });
 });
