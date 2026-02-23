@@ -1,6 +1,8 @@
 // src/client.ts
+import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { AccountStore } from './storage/index.js';
 import { createCredentialReader, type Platform } from './credentials/index.js';
 import { validateToken, refreshToken } from './tokens/index.js';
@@ -9,6 +11,8 @@ import { fetchMessagesUsage, transformMessagesUsage, fetchCostReport, transformC
 import { authorize, type AuthorizeOptions } from './auth/index.js';
 import { AccountNotFoundError, AuthenticationError } from './errors.js';
 import type { Account, AccountUsage, OAuthAccountUsage, AdminAccountUsage, ClaudeUsageClientOptions, UsageOptions, ClaudeCredentials, AdminCredentials } from './types.js';
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_STORAGE = join(homedir(), '.claude-usage', 'accounts.enc');
 
@@ -108,6 +112,19 @@ export class ClaudeUsageClient {
   async renameAccount(oldName: string, newName: string): Promise<void> {
     const renamed = await this.store.renameAccount(oldName, newName);
     if (!renamed) throw new AccountNotFoundError(oldName);
+  }
+
+  async refreshToken(name: string): Promise<void> {
+    // Verify account exists
+    const data = await this.store.load();
+    const account = data.accounts.find(a => a.name === name);
+    if (!account) throw new AccountNotFoundError(name);
+
+    // Run `claude setup-token` to re-provision the OS keychain
+    await execFileAsync('claude', ['setup-token'], { timeout: 30_000 });
+
+    // Re-read from keychain and update our encrypted store
+    await this.saveAccount(name);
   }
 
   async getAllAccountsUsage(options?: UsageOptions): Promise<AccountUsage[]> {

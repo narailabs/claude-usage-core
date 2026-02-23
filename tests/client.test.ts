@@ -7,6 +7,12 @@ import { ClaudeUsageClient } from '../src/client.js';
 import { AccountNotFoundError } from '../src/errors.js';
 import { createCredentialReader } from '../src/credentials/index.js';
 import { authorize } from '../src/auth/index.js';
+import { execFile } from 'node:child_process';
+
+// Mock child_process for refreshToken tests
+vi.mock('node:child_process', () => ({
+  execFile: vi.fn((_cmd: string, _args: string[], _opts: object, cb: Function) => cb(null, '', '')),
+}));
 
 // Mock credential reader
 vi.mock('../src/credentials/index.js', () => ({
@@ -501,6 +507,47 @@ describe('ClaudeUsageClient', () => {
       await client.saveAdminAccount('Admin', ADMIN_KEY);
       const accounts = await client.listAccounts();
       expect(accounts[0].accountType).toBe('admin');
+    });
+  });
+
+  describe('refreshToken', () => {
+    it('runs claude setup-token and re-reads credentials', async () => {
+      const client = makeClient();
+      await client.saveAccount('Work', VALID_CREDS);
+
+      // After setup-token, saveAccount reads from system credentials
+      vi.mocked(createCredentialReader).mockReturnValue({
+        read: vi.fn().mockResolvedValue(VALID_CREDS),
+      });
+
+      await client.refreshToken('Work');
+
+      // Verify execFile was called with 'claude' and 'setup-token'
+      expect(execFile).toHaveBeenCalledWith(
+        'claude',
+        ['setup-token'],
+        expect.objectContaining({ timeout: 30_000 }),
+        expect.any(Function)
+      );
+
+      const accounts = await client.listAccounts();
+      expect(accounts).toHaveLength(1);
+      expect(accounts[0].name).toBe('Work');
+    });
+
+    it('throws for unknown account', async () => {
+      await expect(makeClient().refreshToken('NoSuch')).rejects.toBeInstanceOf(AccountNotFoundError);
+    });
+
+    it('throws when claude CLI fails', async () => {
+      const client = makeClient();
+      await client.saveAccount('Work', VALID_CREDS);
+
+      vi.mocked(execFile).mockImplementation(
+        (_cmd: any, _args: any, _opts: any, cb: any) => cb(new Error('ENOENT: claude not found'), '', '')
+      );
+
+      await expect(client.refreshToken('Work')).rejects.toThrow('claude not found');
     });
   });
 });
