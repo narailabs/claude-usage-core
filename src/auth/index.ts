@@ -8,7 +8,9 @@ export const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 export const OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 
 const AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
+const CREATE_API_KEY_URL = 'https://api.anthropic.com/api/oauth/claude_cli/create_api_key';
 const SCOPES = 'user:profile user:inference user:sessions:claude_code user:mcp_servers';
+const BETA_HEADER = 'oauth-2025-04-20';
 const TIMEOUT_MS = 120_000;
 
 export interface AuthorizeOptions {
@@ -43,6 +45,37 @@ function openBrowser(url: string): void {
     process.platform === 'win32' ? `start "" "${url}"` :
     `xdg-open "${url}"`;
   exec(cmd, () => { /* ignore errors — user can open manually */ });
+}
+
+interface CreateApiKeyResponse {
+  key: string;
+  created_at: string;
+  expires_at: string;
+}
+
+/**
+ * Exchange a short-lived OAuth access token for a long-lived API key (~1 year).
+ * This mirrors what `claude setup-token` does internally.
+ */
+async function createLongLivedToken(accessToken: string): Promise<{ token: string; expiresAt: string }> {
+  const name = `claude-usage-${Date.now()}`;
+  const res = await fetch(CREATE_API_KEY_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      'anthropic-beta': BETA_HEADER,
+    },
+    body: JSON.stringify({ name }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Failed to create long-lived token: HTTP ${res.status} — ${body}`);
+  }
+
+  const data = (await res.json()) as CreateApiKeyResponse;
+  return { token: data.key, expiresAt: data.expires_at };
 }
 
 const SUCCESS_HTML = `<!DOCTYPE html>
@@ -144,11 +177,21 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
         }
 
         const data = (await tokenRes.json()) as TokenResponse;
-        const expiresAt = new Date(Date.now() + data.expires_in * 1000).toISOString();
+
+        // Exchange the short-lived token for a long-lived one (~1 year)
+        let accessToken = data.access_token;
+        let expiresAt = new Date(Date.now() + data.expires_in * 1000).toISOString();
+        try {
+          const longLived = await createLongLivedToken(data.access_token);
+          accessToken = longLived.token;
+          expiresAt = longLived.expiresAt;
+        } catch {
+          // Fall back to short-lived token if long-lived creation fails
+        }
 
         const credentials: ClaudeCredentials = {
           claudeAiOauth: {
-            accessToken: data.access_token,
+            accessToken,
             refreshToken: data.refresh_token,
             expiresAt,
           },

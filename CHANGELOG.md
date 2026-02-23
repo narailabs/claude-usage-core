@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0
+
+- Long-lived OAuth tokens (~1 year) via `/api/oauth/claude_cli/create_api_key`, matching `claude setup-token` behavior
+- Extra usage helpers: `formatCredits`, `formatExtraUsageDisplay`, `isExtraUsageVisible`, `getExtraUtilizationPercent`
+- Fixed extra usage values (monthly_limit, usedCredits) — convert cents to dollars in transform
+- Cost report API: `fetchCostReport`, `transformCostReport` for admin billing data
+- Added `actualCostCents` field to `AdminAccountUsage` for real billing cost
+
 ## 1.0.2
 
 - Updated README with `@narai` scoped package name, install instructions, and import examples

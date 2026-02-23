@@ -105,8 +105,8 @@ export function transformUsageData(data: UsageResponse): Omit<OAuthAccountUsage,
     iguanaNecktie: transformWindow(data.iguana_necktie),
     extraUsage: {
       isEnabled: data.extra_usage?.is_enabled ?? false,
-      monthlyLimit: data.extra_usage?.monthly_limit ?? null,
-      usedCredits: data.extra_usage?.used_credits ?? null,
+      monthlyLimit: data.extra_usage?.monthly_limit != null ? data.extra_usage.monthly_limit / 100 : null,
+      usedCredits: data.extra_usage?.used_credits != null ? data.extra_usage.used_credits / 100 : null,
       utilization: data.extra_usage?.utilization ?? null,
     },
   };

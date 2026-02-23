@@ -57,15 +57,25 @@ describe('authorize', () => {
     vi.restoreAllMocks();
   });
 
-  it('exchanges code for tokens and returns credentials JSON', async () => {
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        access_token: 'test-access-tok',
-        refresh_token: 'test-refresh-tok',
-        expires_in: 3600,
-      }),
-    });
+  it('exchanges code for tokens and returns long-lived credentials', async () => {
+    // First call: token exchange; second call: create long-lived API key
+    fetchSpy
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: 'short-lived-tok',
+          refresh_token: 'test-refresh-tok',
+          expires_in: 3600,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          key: 'sk-ant-oat01-long-lived-key',
+          created_at: '2025-01-01T00:00:00Z',
+          expires_at: '2026-01-01T00:00:00Z',
+        }),
+      });
 
     const authPromise = authorize({ timeoutMs: 5000, _openBrowser: browserSpy });
 
@@ -90,20 +100,69 @@ describe('authorize', () => {
     const credentials = await authPromise;
     const parsed = JSON.parse(credentials);
 
-    expect(parsed.claudeAiOauth.accessToken).toBe('test-access-tok');
+    // Should use the long-lived key, not the short-lived token
+    expect(parsed.claudeAiOauth.accessToken).toBe('sk-ant-oat01-long-lived-key');
     expect(parsed.claudeAiOauth.refreshToken).toBe('test-refresh-tok');
-    expect(parsed.claudeAiOauth.expiresAt).toBeDefined();
+    expect(parsed.claudeAiOauth.expiresAt).toBe('2026-01-01T00:00:00Z');
 
-    // Verify the token exchange request
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    const [fetchUrl, fetchOpts] = fetchSpy.mock.calls[0];
-    expect(fetchUrl).toBe(OAUTH_TOKEN_URL);
-    const body = JSON.parse(fetchOpts.body);
+    // Verify both fetch calls
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    // First call: token exchange
+    const [tokenUrl, tokenOpts] = fetchSpy.mock.calls[0];
+    expect(tokenUrl).toBe(OAUTH_TOKEN_URL);
+    const body = JSON.parse(tokenOpts.body);
     expect(body.grant_type).toBe('authorization_code');
     expect(body.client_id).toBe(OAUTH_CLIENT_ID);
     expect(body.code).toBe('test-code');
     expect(body.code_verifier).toBeDefined();
     expect(body.state).toBeDefined();
+
+    // Second call: create long-lived API key
+    const [apiKeyUrl, apiKeyOpts] = fetchSpy.mock.calls[1];
+    expect(apiKeyUrl).toBe('https://api.anthropic.com/api/oauth/claude_cli/create_api_key');
+    expect(apiKeyOpts.headers.Authorization).toBe('Bearer short-lived-tok');
+    expect(apiKeyOpts.headers['anthropic-beta']).toBe('oauth-2025-04-20');
+    const apiKeyBody = JSON.parse(apiKeyOpts.body);
+    expect(apiKeyBody.name).toMatch(/^claude-usage-/);
+  });
+
+  it('falls back to short-lived token when long-lived creation fails', async () => {
+    fetchSpy
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: 'short-lived-tok',
+          refresh_token: 'test-refresh-tok',
+          expires_in: 3600,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => 'Forbidden',
+      });
+
+    const authPromise = authorize({ timeoutMs: 5000, _openBrowser: browserSpy });
+    await new Promise(r => setTimeout(r, 100));
+
+    const { port, state } = extractFromUrl(capturedUrl);
+
+    await new Promise<void>((resolve, reject) => {
+      http.get(
+        `http://localhost:${port}/callback?code=test-code&state=${state}`,
+        (res) => { res.resume(); res.on('end', resolve); },
+      ).on('error', reject);
+    });
+
+    const credentials = await authPromise;
+    const parsed = JSON.parse(credentials);
+
+    // Falls back to short-lived token
+    expect(parsed.claudeAiOauth.accessToken).toBe('short-lived-tok');
+    expect(parsed.claudeAiOauth.refreshToken).toBe('test-refresh-tok');
+    // expiresAt should be computed from expires_in, not from the API key response
+    expect(parsed.claudeAiOauth.expiresAt).toBeDefined();
   });
 
   it('rejects on state mismatch', async () => {
@@ -193,14 +252,23 @@ describe('authorize', () => {
   });
 
   it('uses default browser opener when _openBrowser not provided', async () => {
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        access_token: 'test-tok',
-        refresh_token: 'test-rt',
-        expires_in: 3600,
-      }),
-    });
+    fetchSpy
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: 'test-tok',
+          refresh_token: 'test-rt',
+          expires_in: 3600,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          key: 'sk-ant-oat01-long-key',
+          created_at: '2025-01-01T00:00:00Z',
+          expires_at: '2026-01-01T00:00:00Z',
+        }),
+      });
 
     const authPromise = authorize({ timeoutMs: 5000 });
     await new Promise(r => setTimeout(r, 100));
@@ -225,7 +293,7 @@ describe('authorize', () => {
     });
 
     const credentials = await authPromise;
-    expect(JSON.parse(credentials).claudeAiOauth.accessToken).toBe('test-tok');
+    expect(JSON.parse(credentials).claudeAiOauth.accessToken).toBe('sk-ant-oat01-long-key');
   });
 
   it('rejects when token exchange fails', async () => {
