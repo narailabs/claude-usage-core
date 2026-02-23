@@ -139,6 +139,19 @@ describe('ClaudeUsageClient', () => {
     it('deleteAccount throws for unknown account', async () => {
       await expect(makeClient().deleteAccount('NoSuch')).rejects.toBeInstanceOf(AccountNotFoundError);
     });
+
+    it('renameAccount renames an existing account', async () => {
+      const client = makeClient();
+      await client.saveAccount('OldName', VALID_CREDS);
+      await client.renameAccount('OldName', 'NewName');
+      const accounts = await client.listAccounts();
+      expect(accounts).toHaveLength(1);
+      expect(accounts[0].name).toBe('NewName');
+    });
+
+    it('renameAccount throws for unknown account', async () => {
+      await expect(makeClient().renameAccount('NoSuch', 'New')).rejects.toBeInstanceOf(AccountNotFoundError);
+    });
   });
 
   describe('getAllAccountsUsage', () => {

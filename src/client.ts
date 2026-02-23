@@ -105,6 +105,11 @@ export class ClaudeUsageClient {
     if (!deleted) throw new AccountNotFoundError(name);
   }
 
+  async renameAccount(oldName: string, newName: string): Promise<void> {
+    const renamed = await this.store.renameAccount(oldName, newName);
+    if (!renamed) throw new AccountNotFoundError(oldName);
+  }
+
   async getAllAccountsUsage(options?: UsageOptions): Promise<AccountUsage[]> {
     const data = await this.store.load();
     return Promise.all(
