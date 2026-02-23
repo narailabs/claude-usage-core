@@ -42,6 +42,7 @@ export interface AdminAccountUsage {
   cacheCreationTokens: number;
   cacheReadTokens: number;
   estimatedCostCents: number;
+  actualCostCents?: number;
   modelBreakdown: ModelUsageBreakdown[];
   actors: ActorUsage[];
   error?: string;

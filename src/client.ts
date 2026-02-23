@@ -5,7 +5,7 @@ import { AccountStore } from './storage/index.js';
 import { createCredentialReader, type Platform } from './credentials/index.js';
 import { validateToken, refreshToken } from './tokens/index.js';
 import { fetchProfile, fetchUsage, transformUsageData } from './usage/index.js';
-import { fetchMessagesUsage, transformMessagesUsage } from './admin/index.js';
+import { fetchMessagesUsage, transformMessagesUsage, fetchCostReport, transformCostReport } from './admin/index.js';
 import { authorize, type AuthorizeOptions } from './auth/index.js';
 import { AccountNotFoundError, AuthenticationError } from './errors.js';
 import type { Account, AccountUsage, OAuthAccountUsage, AdminAccountUsage, ClaudeUsageClientOptions, UsageOptions, ClaudeCredentials, AdminCredentials } from './types.js';
@@ -131,13 +131,17 @@ export class ClaudeUsageClient {
   private async _fetchAdminAccountUsage(name: string, credentialsJson: string, startingAt?: string): Promise<AdminAccountUsage> {
     try {
       const creds: AdminCredentials = JSON.parse(credentialsJson);
-      const buckets = await fetchMessagesUsage(creds.adminApiKey, startingAt);
+      const [buckets, costBuckets] = await Promise.all([
+        fetchMessagesUsage(creds.adminApiKey, startingAt),
+        fetchCostReport(creds.adminApiKey, startingAt).catch(() => null),
+      ]);
       const usage = transformMessagesUsage(buckets, name);
       // Use requested date range for period display instead of data-derived dates
       const requestedStart = startingAt ?? `${new Date().toISOString().slice(0, 8)}01`;
       usage.periodStart = new Date(`${requestedStart}T00:00:00Z`);
       usage.periodEnd = new Date();
-      return { accountType: 'admin', ...usage };
+      const actualCostCents = costBuckets !== null ? transformCostReport(costBuckets) : undefined;
+      return { accountType: 'admin', ...usage, ...(actualCostCents !== undefined ? { actualCostCents } : {}) };
     } catch (err) {
       return {
         accountType: 'admin',

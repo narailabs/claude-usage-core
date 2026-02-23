@@ -6,6 +6,33 @@ import { estimateCostCents } from './pricing.js';
 const API_BASE = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
 
+// Raw API response types for /cost_report
+interface RawCostBucketResult {
+  amount: string;
+  currency: string;
+  cost_type: string | null;
+  description: string | null;
+  model: string | null;
+  token_type: string | null;
+  service_tier: string | null;
+  workspace_id: string | null;
+  context_window: string | null;
+  inference_geo: string | null;
+  speed: string | null;
+}
+
+interface RawCostBucket {
+  starting_at: string;
+  ending_at: string;
+  results: RawCostBucketResult[];
+}
+
+interface RawCostReport {
+  data: RawCostBucket[];
+  has_more: boolean;
+  next_page: string | null;
+}
+
 // Raw API response types for /usage_report/messages
 interface RawCacheCreation {
   ephemeral_5m_input_tokens: number;
@@ -213,4 +240,74 @@ export function transformMessagesUsage(
     modelBreakdown: Array.from(globalModelMap.values()),
     actors,
   };
+}
+
+/**
+ * Fetches the cost report from the Admin API.
+ * Uses /v1/organizations/cost_report with daily buckets.
+ * Returns actual billed costs rather than token-based estimates.
+ * @param startingAt YYYY-MM-DD date string (converted to RFC 3339 internally)
+ */
+export async function fetchCostReport(
+  adminApiKey: string,
+  startingAt?: string,
+): Promise<RawCostBucket[]> {
+  const startDate = startingAt ?? `${new Date().toISOString().slice(0, 8)}01`;
+  const start = `${startDate}T00:00:00Z`;
+
+  // End at tomorrow to include all of today's data
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const end = `${tomorrow.toISOString().slice(0, 10)}T00:00:00Z`;
+
+  const buckets: RawCostBucket[] = [];
+  let page: string | null = null;
+
+  do {
+    const params = new URLSearchParams({
+      starting_at: start,
+      ending_at: end,
+      bucket_width: '1d',
+      limit: '31',
+    });
+    if (page) params.set('page', page);
+
+    const url = `${API_BASE}/organizations/cost_report?${params}`;
+    const response = await fetch(url, {
+      headers: {
+        'x-api-key': adminApiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+      },
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) throw new AuthenticationError(401);
+      let errorMessage = '';
+      try {
+        const body = await response.json() as { error?: { message?: string } };
+        errorMessage = body.error?.message ?? '';
+      } catch { /* ignore parse errors */ }
+      throw new Error(errorMessage || `Admin API error: ${response.status} ${response.statusText}`);
+    }
+
+    const body = await response.json() as RawCostReport;
+    buckets.push(...body.data);
+    page = body.has_more ? body.next_page : null;
+  } while (page);
+
+  return buckets;
+}
+
+/**
+ * Aggregates raw cost report buckets into a total cost in cents.
+ * The `amount` field is a decimal string in cents (e.g. "123.45" = 123.45 cents = $1.2345).
+ */
+export function transformCostReport(buckets: RawCostBucket[]): number {
+  let totalCents = 0;
+  for (const bucket of buckets) {
+    for (const result of bucket.results) {
+      totalCents += parseFloat(result.amount);
+    }
+  }
+  return totalCents;
 }
