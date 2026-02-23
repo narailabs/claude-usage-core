@@ -9,7 +9,7 @@ export const OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 
 const AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
 const CREATE_API_KEY_URL = 'https://api.anthropic.com/api/oauth/claude_cli/create_api_key';
-const SCOPES = 'user:profile user:inference user:sessions:claude_code user:mcp_servers';
+const SCOPES = 'user:profile user:inference user:sessions:claude_code user:mcp_servers org:create_api_key';
 const BETA_HEADER = 'oauth-2025-04-20';
 const TIMEOUT_MS = 120_000;
 
