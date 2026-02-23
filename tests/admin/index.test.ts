@@ -1,6 +1,6 @@
 // tests/admin/index.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fetchMessagesUsage, transformMessagesUsage } from '../../src/admin/index.js';
+import { fetchMessagesUsage, transformMessagesUsage, fetchCostReport, transformCostReport } from '../../src/admin/index.js';
 import { AuthenticationError } from '../../src/errors.js';
 
 // Helper to build a raw bucket result matching the messages API shape
@@ -261,5 +261,206 @@ describe('transformMessagesUsage', () => {
     expect(result.modelBreakdown[0].model).toBe('unknown');
     // Unknown model should have 0 cost
     expect(result.modelBreakdown[0].estimatedCostCents).toBe(0);
+  });
+});
+
+// Helper to build a raw cost bucket result
+function makeCostResult(overrides: Partial<{
+  amount: string;
+  currency: string;
+  cost_type: string | null;
+  description: string | null;
+  model: string | null;
+  token_type: string | null;
+  service_tier: string | null;
+  workspace_id: string | null;
+  context_window: string | null;
+  inference_geo: string | null;
+  speed: string | null;
+}> = {}) {
+  return {
+    amount: overrides.amount ?? '100.00',
+    currency: overrides.currency ?? 'USD',
+    cost_type: 'cost_type' in overrides ? overrides.cost_type : 'tokens',
+    description: 'description' in overrides ? overrides.description : null,
+    model: 'model' in overrides ? overrides.model : 'claude-sonnet-4-20250514',
+    token_type: 'token_type' in overrides ? overrides.token_type : null,
+    service_tier: 'service_tier' in overrides ? overrides.service_tier : null,
+    workspace_id: 'workspace_id' in overrides ? overrides.workspace_id : null,
+    context_window: 'context_window' in overrides ? overrides.context_window : null,
+    inference_geo: 'inference_geo' in overrides ? overrides.inference_geo : null,
+    speed: 'speed' in overrides ? overrides.speed : null,
+  };
+}
+
+function makeCostBucket(date: string, results: ReturnType<typeof makeCostResult>[]) {
+  return { starting_at: date, ending_at: date, results };
+}
+
+const MOCK_COST_BUCKETS = [
+  makeCostBucket('2026-02-15', [
+    makeCostResult({ amount: '123.45', model: 'claude-sonnet-4-20250514' }),
+    makeCostResult({ amount: '50.00', model: 'claude-haiku-4-5-20251001' }),
+  ]),
+  makeCostBucket('2026-02-16', [
+    makeCostResult({ amount: '200.00', model: 'claude-sonnet-4-20250514' }),
+  ]),
+];
+
+describe('fetchCostReport', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it('fetches cost report data successfully', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: MOCK_COST_BUCKETS, has_more: false, next_page: null }),
+    }));
+    const buckets = await fetchCostReport('sk-ant-admin-test');
+    expect(buckets).toHaveLength(2);
+    expect(buckets[0].starting_at).toBe('2026-02-15');
+    expect(buckets[0].results[0].amount).toBe('123.45');
+  });
+
+  it('sends correct headers and URL', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [], has_more: false, next_page: null }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchCostReport('sk-ant-admin-test');
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain('/v1/organizations/cost_report');
+    expect(url).toContain('bucket_width=1d');
+    expect(url).toContain('limit=31');
+    expect(init.headers['x-api-key']).toBe('sk-ant-admin-test');
+    expect(init.headers['anthropic-version']).toBe('2023-06-01');
+  });
+
+  it('passes starting_at parameter', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [], has_more: false, next_page: null }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchCostReport('sk-ant-admin-test', '2026-01-01');
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain('starting_at=2026-01-01T00%3A00%3A00Z');
+  });
+
+  it('defaults starting_at to first of current month', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [], has_more: false, next_page: null }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchCostReport('sk-ant-admin-test');
+
+    const [url] = mockFetch.mock.calls[0];
+    const expectedStart = `${new Date().toISOString().slice(0, 8)}01`;
+    expect(url).toContain(`starting_at=${expectedStart}`);
+  });
+
+  it('includes ending_at set to tomorrow', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [], has_more: false, next_page: null }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchCostReport('sk-ant-admin-test');
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain('ending_at=');
+  });
+
+  it('handles pagination', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [MOCK_COST_BUCKETS[0]], has_more: true, next_page: 'page2token' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [MOCK_COST_BUCKETS[1]], has_more: false, next_page: null }),
+      });
+    vi.stubGlobal('fetch', mockFetch);
+    const buckets = await fetchCostReport('sk-ant-admin-test');
+
+    expect(buckets).toHaveLength(2);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const [secondUrl] = mockFetch.mock.calls[1];
+    expect(secondUrl).toContain('page=page2token');
+  });
+
+  it('throws AuthenticationError on 401', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, statusText: 'Unauthorized' }));
+    await expect(fetchCostReport('bad-key')).rejects.toBeInstanceOf(AuthenticationError);
+  });
+
+  it('throws error with API message on failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      json: async () => ({ error: { message: 'Insufficient permissions' } }),
+    }));
+    await expect(fetchCostReport('sk-ant-admin-test')).rejects.toThrow('Insufficient permissions');
+  });
+
+  it('throws generic error when no API message', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Server Error',
+      json: async () => ({}),
+    }));
+    await expect(fetchCostReport('sk-ant-admin-test')).rejects.toThrow('Admin API error: 500 Server Error');
+  });
+});
+
+describe('transformCostReport', () => {
+  it('sums amounts across all buckets and results', () => {
+    // MOCK_COST_BUCKETS: 123.45 + 50.00 + 200.00 = 373.45 cents
+    const total = transformCostReport(MOCK_COST_BUCKETS);
+    expect(total).toBeCloseTo(373.45, 5);
+  });
+
+  it('returns 0 for empty buckets', () => {
+    const total = transformCostReport([]);
+    expect(total).toBe(0);
+  });
+
+  it('returns 0 for buckets with no results', () => {
+    const buckets = [makeCostBucket('2026-02-15', [])];
+    const total = transformCostReport(buckets);
+    expect(total).toBe(0);
+  });
+
+  it('handles a single result', () => {
+    const buckets = [makeCostBucket('2026-02-15', [makeCostResult({ amount: '42.50' })])];
+    const total = transformCostReport(buckets);
+    expect(total).toBeCloseTo(42.5, 5);
+  });
+
+  it('handles fractional cent amounts correctly', () => {
+    const buckets = [
+      makeCostBucket('2026-02-15', [
+        makeCostResult({ amount: '1.1' }),
+        makeCostResult({ amount: '2.2' }),
+        makeCostResult({ amount: '3.3' }),
+      ]),
+    ];
+    const total = transformCostReport(buckets);
+    expect(total).toBeCloseTo(6.6, 5);
+  });
+
+  it('handles null cost_type results (non-token charges)', () => {
+    const buckets = [makeCostBucket('2026-02-15', [
+      makeCostResult({ amount: '10.00', cost_type: null }),
+      makeCostResult({ amount: '5.00', cost_type: 'web_search' }),
+    ])];
+    const total = transformCostReport(buckets);
+    expect(total).toBeCloseTo(15.0, 5);
   });
 });
