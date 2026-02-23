@@ -30,8 +30,8 @@ describe('authorize', () => {
     vi.restoreAllMocks();
   });
 
-  it('spawns claude setup-token and returns credentials from stdout token', async () => {
-    vi.mocked(spawn).mockReturnValue(makeChild(`Setting up...\n${FAKE_TOKEN}\nDone.\n`));
+  it('spawns claude setup-token and parses token from stdout', async () => {
+    vi.mocked(spawn).mockReturnValue(makeChild(`${FAKE_TOKEN}\n`));
 
     const result = await authorize();
     const creds = JSON.parse(result);
@@ -44,6 +44,13 @@ describe('authorize', () => {
       'claude', ['setup-token'],
       expect.objectContaining({ stdio: ['inherit', 'pipe', 'inherit'] })
     );
+  });
+
+  it('extracts token when embedded in surrounding text', async () => {
+    vi.mocked(spawn).mockReturnValue(makeChild(`Setting up...\n✓ Token: ${FAKE_TOKEN}\nDone.\n`));
+
+    const result = await authorize();
+    expect(JSON.parse(result).claudeAiOauth.accessToken).toBe(FAKE_TOKEN);
   });
 
   it('uses _claudeCommand override', async () => {
@@ -75,7 +82,6 @@ describe('authorize', () => {
     (child as any).stdout = stdout;
     const killSpy = vi.fn();
     (child as any).kill = killSpy;
-    // Never emits close — simulates a hung process
     vi.mocked(spawn).mockReturnValue(child);
 
     await expect(authorize({ timeoutMs: 100 })).rejects.toThrow('timed out');
@@ -84,8 +90,7 @@ describe('authorize', () => {
 
   it('throws on spawn error', async () => {
     const child = new EventEmitter() as ReturnType<typeof spawn>;
-    const stdout = new EventEmitter();
-    (child as any).stdout = stdout;
+    (child as any).stdout = new EventEmitter();
     (child as any).kill = vi.fn();
     setImmediate(() => child.emit('error', new Error('spawn ENOENT')));
     vi.mocked(spawn).mockReturnValue(child);
