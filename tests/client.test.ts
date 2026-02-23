@@ -25,11 +25,12 @@ vi.mock('../src/admin/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/admin/index.js')>();
   return {
     ...actual,
-    fetchClaudeCodeUsage: vi.fn(),
+    fetchMessagesUsage: vi.fn(),
+    fetchCostReport: vi.fn(),
   };
 });
 
-import { fetchClaudeCodeUsage } from '../src/admin/index.js';
+import { fetchMessagesUsage, fetchCostReport } from '../src/admin/index.js';
 import { AuthenticationError } from '../src/errors.js';
 
 const MOCK_USAGE = {
@@ -58,14 +59,18 @@ const ADMIN_KEY = 'sk-ant-admin-test-key-123';
 
 const MOCK_ADMIN_ENTRIES = [
   {
-    date: '2026-02-15',
-    actor: { api_actor: { api_key_name: 'my-key' } },
-    customer_type: 'api',
-    model_breakdown: [
+    starting_at: '2026-02-15T00:00:00Z',
+    ending_at: '2026-02-16T00:00:00Z',
+    results: [
       {
+        api_key_id: 'my-key',
         model: 'claude-sonnet-4-20250514',
-        tokens: { input: 5000, output: 1000, cache_creation: 200, cache_read: 300 },
-        estimated_cost: { amount: 150, currency: 'cents' },
+        workspace_id: null,
+        uncached_input_tokens: 5000,
+        cache_read_input_tokens: 0,
+        cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+        output_tokens: 1000,
+        server_tool_use: { web_search_requests: 0 },
       },
     ],
   },
@@ -90,6 +95,8 @@ beforeEach(async () => {
     ok: true,
     json: async () => MOCK_USAGE,
   }));
+  vi.mocked(fetchMessagesUsage).mockResolvedValue([]);
+  vi.mocked(fetchCostReport).mockResolvedValue([]);
 });
 
 afterEach(async () => {
@@ -417,7 +424,7 @@ describe('ClaudeUsageClient', () => {
 
   describe('saveAdminAccount', () => {
     it('saves admin account with valid key', async () => {
-      vi.mocked(fetchClaudeCodeUsage).mockResolvedValue([]);
+      vi.mocked(fetchMessagesUsage).mockResolvedValue([]);
       const client = makeClient();
       await client.saveAdminAccount('Admin', ADMIN_KEY);
       const accounts = await client.listAccounts();
@@ -434,7 +441,7 @@ describe('ClaudeUsageClient', () => {
     });
 
     it('propagates API errors from validation', async () => {
-      vi.mocked(fetchClaudeCodeUsage).mockRejectedValue(new AuthenticationError(401));
+      vi.mocked(fetchMessagesUsage).mockRejectedValue(new AuthenticationError(401));
       const client = makeClient();
       await expect(client.saveAdminAccount('Admin', ADMIN_KEY)).rejects.toBeInstanceOf(AuthenticationError);
     });
@@ -442,17 +449,17 @@ describe('ClaudeUsageClient', () => {
 
   describe('admin account usage', () => {
     it('fetches Claude Code usage for admin account', async () => {
-      vi.mocked(fetchClaudeCodeUsage).mockResolvedValue([]);
+      vi.mocked(fetchMessagesUsage).mockResolvedValue([]);
       const client = makeClient();
       await client.saveAdminAccount('Admin', ADMIN_KEY);
 
-      vi.mocked(fetchClaudeCodeUsage).mockResolvedValue(MOCK_ADMIN_ENTRIES);
+      vi.mocked(fetchMessagesUsage).mockResolvedValue(MOCK_ADMIN_ENTRIES);
       const result = await client.getAccountUsage('Admin');
       expect(result.accountType).toBe('admin');
       if (result.accountType === 'admin') {
         expect(result.inputTokens).toBe(5000);
         expect(result.outputTokens).toBe(1000);
-        expect(result.estimatedCostCents).toBe(150);
+        expect(result.estimatedCostCents).toBe(3);
         expect(result.modelBreakdown).toHaveLength(1);
         expect(result.actors).toHaveLength(1);
         expect(result.actors[0].actorType).toBe('api_key');
@@ -461,24 +468,24 @@ describe('ClaudeUsageClient', () => {
     });
 
     it('returns error on admin API failure', async () => {
-      vi.mocked(fetchClaudeCodeUsage).mockResolvedValue([]);
+      vi.mocked(fetchMessagesUsage).mockResolvedValue([]);
       const client = makeClient();
       await client.saveAdminAccount('Admin', ADMIN_KEY);
 
-      vi.mocked(fetchClaudeCodeUsage).mockRejectedValue(new Error('Network error'));
+      vi.mocked(fetchMessagesUsage).mockRejectedValue(new Error('Network error'));
       const result = await client.getAccountUsage('Admin');
       expect(result.accountType).toBe('admin');
       expect(result.error).toBe('Network error');
     });
 
     it('includes both oauth and admin in getAllAccountsUsage', async () => {
-      vi.mocked(fetchClaudeCodeUsage).mockResolvedValue([]);
+      vi.mocked(fetchMessagesUsage).mockResolvedValue([]);
 
       const client = makeClient();
       await client.saveAccount('OAuth', VALID_CREDS);
       await client.saveAdminAccount('Admin', ADMIN_KEY);
 
-      vi.mocked(fetchClaudeCodeUsage).mockResolvedValue(MOCK_ADMIN_ENTRIES);
+      vi.mocked(fetchMessagesUsage).mockResolvedValue(MOCK_ADMIN_ENTRIES);
       const results = await client.getAllAccountsUsage();
       expect(results).toHaveLength(2);
 
@@ -496,7 +503,7 @@ describe('ClaudeUsageClient', () => {
     });
 
     it('shows admin type for admin accounts', async () => {
-      vi.mocked(fetchClaudeCodeUsage).mockResolvedValue([]);
+      vi.mocked(fetchMessagesUsage).mockResolvedValue([]);
       const client = makeClient();
       await client.saveAdminAccount('Admin', ADMIN_KEY);
       const accounts = await client.listAccounts();

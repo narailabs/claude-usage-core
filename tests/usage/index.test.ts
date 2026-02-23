@@ -67,7 +67,7 @@ describe('transformUsageData', () => {
       seven_day_oauth_apps: null,
       seven_day_cowork: null,
       iguana_necktie: null,
-      extra_usage: { is_enabled: true, monthly_limit: 100, used_credits: 25, utilization: 0.25 },
+      extra_usage: { is_enabled: true, monthly_limit: 10000, used_credits: 2500, utilization: 0.25 },
     };
     const result = transformUsageData(raw);
     expect(result.session.percent).toBe(0.45);
