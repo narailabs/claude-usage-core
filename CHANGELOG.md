@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0
+
+- Added `renameAccount(oldName, newName)` to rename saved accounts (rejects duplicate names)
+- Added `refreshToken(name)` to re-provision OAuth tokens via `claude setup-token` CLI
+- Admin accounts are guarded from accidental token refresh
+
 ## 1.1.0
 
 - Long-lived OAuth tokens (~1 year) via `/api/oauth/claude_cli/create_api_key`, matching `claude setup-token` behavior
