@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+
+- Fixed `refreshToken` to use OAuth browser flow directly instead of shelling out to `claude setup-token` (works in VS Code extension host)
+- Added `requireLongLived` option to `authorize()` — throws instead of silently falling back to short-lived tokens
+- `refreshToken` now requires the long-lived (~1 year) token and fails loudly if creation fails
+
 ## 1.2.0
 
 - Added `renameAccount(oldName, newName)` to rename saved accounts (rejects duplicate names)
