@@ -136,4 +136,32 @@ describe('AccountStore', () => {
     const data = await store.load();
     expect(data.accounts[0].accountType).toBe('admin');
   });
+
+  describe('renameAccount', () => {
+    it('renames an existing account', async () => {
+      const store = new AccountStore(join(tmpDir, 'accounts.enc'));
+      await store.saveAccount('old-name', '{"test":true}', 'test@example.com', 'oauth');
+      await store.renameAccount('old-name', 'new-name');
+      const data = await store.load();
+      expect(data.accounts).toHaveLength(1);
+      expect(data.accounts[0].name).toBe('new-name');
+      expect(data.accounts[0].email).toBe('test@example.com');
+      expect(data.accounts[0].credentials).toBe('{"test":true}');
+    });
+
+    it('updates activeAccountName if renamed account is active', async () => {
+      const store = new AccountStore(join(tmpDir, 'accounts.enc'));
+      await store.saveAccount('active-one', '{"test":true}', undefined, 'oauth');
+      await store.setActiveAccount('active-one');
+      await store.renameAccount('active-one', 'renamed');
+      const data = await store.load();
+      expect(data.activeAccountName).toBe('renamed');
+    });
+
+    it('returns false for nonexistent account', async () => {
+      const store = new AccountStore(join(tmpDir, 'accounts.enc'));
+      const result = await store.renameAccount('no-such', 'new');
+      expect(result).toBe(false);
+    });
+  });
 });
