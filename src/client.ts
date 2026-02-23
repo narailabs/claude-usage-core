@@ -119,8 +119,8 @@ export class ClaudeUsageClient {
       throw new Error('Cannot refresh token for an admin account');
     }
 
-    // Re-authenticate via OAuth browser flow (requires long-lived ~1yr token)
-    await this.authenticate(name, { requireLongLived: true });
+    // Re-authenticate via claude setup-token (always yields long-lived ~1yr token)
+    await this.authenticate(name);
   }
 
   async getAllAccountsUsage(options?: UsageOptions): Promise<AccountUsage[]> {
