@@ -29,7 +29,7 @@ OS Keychain/Credentials → credentials/ → client.ts → tokens/ (validate/ref
 ### Key modules
 
 - **`src/client.ts`** — `ClaudeUsageClient` is the main public API. Orchestrates credential reading, OAuth authentication, token lifecycle, usage fetching, and account management.
-- **`src/auth/`** — OAuth authorization code flow with PKCE. `authorize()` opens the browser, listens for the callback, exchanges the code for tokens, and returns a `ClaudeCredentials` JSON string. Also exports `generatePKCE()` and the OAuth constants (`OAUTH_CLIENT_ID`, `OAUTH_TOKEN_URL`).
+- **`src/auth/`** — Authorizes by spawning `claude setup-token`, which opens the browser and prints a long-lived `sk-ant-...` token to stdout. `authorize()` captures that token and returns a `ClaudeCredentials` JSON string with a ~1-year expiry. Also exports `OAUTH_CLIENT_ID` and `OAUTH_TOKEN_URL` (used by `tokens/`).
 - **`src/credentials/`** — Platform-specific credential readers (macOS Keychain, Linux secret-tool/file, Windows DPAPI/file). Factory via `createCredentialReader(platform)`. All implement the `CredentialReader` interface from `types.ts`.
 - **`src/storage/`** — `AccountStore` persists accounts to an AES-256-GCM encrypted file (default `~/.claude-usage/accounts.enc`). Key is derived from machine ID via PBKDF2. `crypto.ts` handles encrypt/decrypt.
 - **`src/tokens/`** — `validateToken()` checks expiry from credentials JSON. `refreshToken()` calls the Anthropic OAuth token endpoint. Uses `OAUTH_CLIENT_ID` and `OAUTH_TOKEN_URL` from `auth/`.
