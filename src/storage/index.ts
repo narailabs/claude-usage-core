@@ -71,6 +71,9 @@ export class AccountStore {
     const data = await this.load();
     const account = data.accounts.find(a => a.name === oldName);
     if (!account) return false;
+    if (data.accounts.some(a => a.name === newName)) {
+      throw new StorageError(`Account "${newName}" already exists`);
+    }
     account.name = newName;
     if (data.activeAccountName === oldName) data.activeAccountName = newName;
     await this.save(data);

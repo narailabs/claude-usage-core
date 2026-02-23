@@ -115,10 +115,13 @@ export class ClaudeUsageClient {
   }
 
   async refreshToken(name: string): Promise<void> {
-    // Verify account exists
+    // Verify account exists and is OAuth
     const data = await this.store.load();
     const account = data.accounts.find(a => a.name === name);
     if (!account) throw new AccountNotFoundError(name);
+    if (account.accountType === 'admin') {
+      throw new Error('Cannot refresh token for an admin account');
+    }
 
     // Run `claude setup-token` to re-provision the OS keychain
     await execFileAsync('claude', ['setup-token'], { timeout: 30_000 });
