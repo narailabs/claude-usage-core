@@ -1,8 +1,6 @@
 // src/client.ts
-import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { AccountStore } from './storage/index.js';
 import { createCredentialReader, type Platform } from './credentials/index.js';
 import { validateToken, refreshToken } from './tokens/index.js';
@@ -11,8 +9,6 @@ import { fetchMessagesUsage, transformMessagesUsage, fetchCostReport, transformC
 import { authorize, type AuthorizeOptions } from './auth/index.js';
 import { AccountNotFoundError, AuthenticationError } from './errors.js';
 import type { Account, AccountUsage, OAuthAccountUsage, AdminAccountUsage, ClaudeUsageClientOptions, UsageOptions, ClaudeCredentials, AdminCredentials } from './types.js';
-
-const execFileAsync = promisify(execFile);
 
 const DEFAULT_STORAGE = join(homedir(), '.claude-usage', 'accounts.enc');
 
@@ -123,11 +119,8 @@ export class ClaudeUsageClient {
       throw new Error('Cannot refresh token for an admin account');
     }
 
-    // Run `claude setup-token` to re-provision the OS keychain
-    await execFileAsync('claude', ['setup-token'], { timeout: 30_000 });
-
-    // Re-read from keychain and update our encrypted store
-    await this.saveAccount(name);
+    // Re-authenticate via OAuth browser flow (requires long-lived ~1yr token)
+    await this.authenticate(name, { requireLongLived: true });
   }
 
   async getAllAccountsUsage(options?: UsageOptions): Promise<AccountUsage[]> {

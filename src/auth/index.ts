@@ -16,6 +16,8 @@ const TIMEOUT_MS = 120_000;
 export interface AuthorizeOptions {
   /** Override the timeout in milliseconds (default 120s) */
   timeoutMs?: number;
+  /** Require long-lived token — throw instead of falling back to short-lived */
+  requireLongLived?: boolean;
   /** @internal Override browser opener for testing */
   _openBrowser?: (url: string) => void;
 }
@@ -92,6 +94,7 @@ const SUCCESS_HTML = `<!DOCTYPE html>
 export async function authorize(options?: AuthorizeOptions): Promise<string> {
   const timeoutMs = options?.timeoutMs ?? TIMEOUT_MS;
   const openFn = options?._openBrowser ?? openBrowser;
+  const requireLongLived = options?.requireLongLived ?? false;
   const { codeVerifier, codeChallenge } = generatePKCE();
   const state = base64url(randomBytes(32));
 
@@ -185,7 +188,10 @@ export async function authorize(options?: AuthorizeOptions): Promise<string> {
           const longLived = await createLongLivedToken(data.access_token);
           accessToken = longLived.token;
           expiresAt = longLived.expiresAt;
-        } catch {
+        } catch (err) {
+          if (requireLongLived) {
+            throw new Error(`Failed to create long-lived token: ${(err as Error).message}`);
+          }
           // Fall back to short-lived token if long-lived creation fails
         }
 
