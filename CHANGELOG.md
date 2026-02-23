@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0
+
+- Replaced custom PKCE OAuth flow with a wrapper around `claude setup-token` CLI — resolves 403 errors on personal accounts that blocked long-lived token creation
+- `authorize()` now always yields a long-lived `sk-ant-...` token (~1 year expiry) by spawning `claude setup-token`
+- Removed `requireLongLived` and `_openBrowser` from `AuthorizeOptions`; added `_claudeCommand` (testing override)
+
 ## 1.2.2
 
 - Added `org:create_api_key` scope to OAuth flow — required for creating long-lived tokens
