@@ -3,3 +3,5 @@ dist/
 coverage/
 *.enc
 .env
+
+.DS_Store
